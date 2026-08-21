@@ -1,0 +1,17 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-knative
+  namespace: argocd
+  annotations: {argocd.argoproj.io/sync-wave: "-35"}
+spec:
+  project: iris-production
+  source:
+    repoURL: https://github.com/chiendz11/iris-gitops.git
+    targetRevision: main
+    path: platform/knative
+  destination: {server: "https://kubernetes.default.svc", namespace: knative-serving}
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [CreateNamespace=true, ServerSideApply=true]
+    retry: {limit: 10}

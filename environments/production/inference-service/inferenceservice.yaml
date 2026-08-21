@@ -1,0 +1,38 @@
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: iris-classifier
+  namespace: mlops
+  annotations:
+    serving.kserve.io/deploymentMode: Serverless
+spec:
+  predictor:
+    minReplicas: 1
+    maxReplicas: 3
+    podMetadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: "8080"
+    containers:
+      - name: kserve-container
+        image: REPLACE_ECR_INFERENCE_IMAGE
+        ports: [{containerPort: 8080, protocol: TCP}]
+        env:
+          - {name: MLFLOW_TRACKING_URI, value: "http://mlflow.mlops.svc.cluster.local:5000"}
+          - {name: MODEL_URI, value: "models:/iris-classifier@champion"}
+          - {name: SERVICE_NAME, value: iris-classifier}
+          - {name: DRIFT_WINDOW_SIZE, value: "200"}
+          - {name: DRIFT_MIN_SAMPLES, value: "30"}
+          - {name: DRIFT_ZSCORE_THRESHOLD, value: "3.0"}
+        resources:
+          requests: {cpu: 100m, memory: 256Mi}
+          limits: {cpu: "1", memory: 512Mi}
+        readinessProbe:
+          httpGet: {path: /v2/health/ready, port: 8080}
+          initialDelaySeconds: 3
+          periodSeconds: 5
+        livenessProbe:
+          httpGet: {path: /v2/health/live, port: 8080}
+          initialDelaySeconds: 10
+          periodSeconds: 10

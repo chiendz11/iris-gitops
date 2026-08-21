@@ -1,0 +1,14 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: iris-classifier
+  namespace: mlops
+  labels: {release: monitoring}
+spec:
+  selector:
+    matchLabels: {serving.kserve.io/inferenceservice: iris-classifier}
+  namespaceSelector:
+    matchNames: [mlops]
+  podTargetLabels: [serving.knative.dev/revision]
+  podMetricsEndpoints:
+    - {targetPort: 8080, path: /metrics, interval: 15s}

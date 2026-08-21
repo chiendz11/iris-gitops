@@ -1,0 +1,137 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata: {name: iris-model-lifecycle, namespace: argo}
+spec:
+  serviceAccountName: iris-training
+  entrypoint: lifecycle
+  arguments:
+    parameters:
+      - {name: training-image, value: REPLACE_ECR_TRAINING_IMAGE}
+      - {name: dataset-bucket, value: REPLACE_DVC_BUCKET}
+      - {name: dataset-key, value: datasets/iris.csv}
+      - {name: dataset-version, value: unknown}
+      - {name: mlflow-tracking-uri, value: "http://mlflow.mlops.svc.cluster.local:5000"}
+      - {name: prometheus-url, value: "http://monitoring-kube-prometheus-prometheus.monitoring.svc:9090"}
+      - {name: inference-url, value: "http://iris-classifier-predictor.mlops.svc.cluster.local/v1/models/iris-classifier:predict"}
+  volumeClaimTemplates:
+    - metadata: {name: workspace}
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: {requests: {storage: 1Gi}}
+  templates:
+    - name: lifecycle
+      dag:
+        tasks:
+          - {name: fetch-dataset, template: fetch}
+          - {name: train, dependencies: [fetch-dataset], template: train}
+          - name: canary-10
+            dependencies: [train]
+            when: "'{{tasks.train.outputs.parameters.quality-gate}}' == 'true' && '{{tasks.train.outputs.parameters.bootstrap-required}}' == 'false'"
+            template: rollout
+            arguments:
+              parameters:
+                - {name: traffic, value: "10"}
+                - {name: model-alias, value: candidate}
+          - name: bootstrap-promote
+            dependencies: [train]
+            when: "'{{tasks.train.outputs.parameters.bootstrap-required}}' == 'true'"
+            template: promote
+            arguments:
+              parameters:
+                - {name: version, value: "{{tasks.train.outputs.parameters.model-version}}"}
+          - name: bootstrap-rollout
+            dependencies: [bootstrap-promote]
+            template: rollout
+            arguments:
+              parameters:
+                - {name: traffic, value: "100"}
+                - {name: model-alias, value: champion}
+          - {name: generate-traffic, dependencies: [canary-10], template: smoke}
+          - {name: observe-canary, dependencies: [generate-traffic], template: observe}
+          - name: promote-registry
+            dependencies: [observe-canary]
+            when: "'{{tasks.observe-canary.outputs.parameters.passed}}' == 'true'"
+            template: promote
+            arguments:
+              parameters:
+                - {name: version, value: "{{tasks.train.outputs.parameters.model-version}}"}
+          - name: rollout-100
+            dependencies: [promote-registry]
+            template: rollout
+            arguments:
+              parameters:
+                - {name: traffic, value: "100"}
+                - {name: model-alias, value: champion}
+          - name: rollback
+            dependencies: [observe-canary]
+            when: "'{{tasks.observe-canary.outputs.parameters.passed}}' != 'true'"
+            template: rollout
+            arguments:
+              parameters:
+                - {name: traffic, value: "0"}
+                - {name: model-alias, value: champion}
+
+    - name: fetch
+      container:
+        image: "{{workflow.parameters.training-image}}"
+        command: [python, -m, src.fetch_data]
+        args: [--bucket, "{{workflow.parameters.dataset-bucket}}", --key, "{{workflow.parameters.dataset-key}}", --destination, /workspace/data/iris.csv]
+        volumeMounts: [{name: workspace, mountPath: /workspace}]
+
+    - name: train
+      outputs:
+        parameters:
+          - {name: model-version, valueFrom: {path: /app/outputs/model-version.txt}}
+          - {name: quality-gate, valueFrom: {path: /app/outputs/quality-gate.txt}}
+          - {name: bootstrap-required, valueFrom: {path: /app/outputs/bootstrap-required.txt}}
+      container:
+        image: "{{workflow.parameters.training-image}}"
+        command: [python, -m, src.train]
+        args: [/workspace/data/iris.csv, params.yaml]
+        workingDir: /app
+        env:
+          - {name: MLFLOW_TRACKING_URI, value: "{{workflow.parameters.mlflow-tracking-uri}}"}
+          - {name: REGISTER_MODEL, value: "true"}
+          - {name: MODEL_NAME, value: iris-classifier}
+          - {name: DATASET_VERSION, value: "{{workflow.parameters.dataset-version}}"}
+          - {name: GIT_COMMIT, value: "{{workflow.uid}}"}
+        volumeMounts:
+          - {name: workspace, mountPath: /app/outputs}
+          - {name: workspace, mountPath: /workspace}
+
+    - name: smoke
+      container:
+        image: "{{workflow.parameters.training-image}}"
+        command: [python, -m, src.smoke]
+        args: [--url, "{{workflow.parameters.inference-url}}", --requests, "200"]
+
+    - name: observe
+      outputs:
+        parameters:
+          - {name: passed, valueFrom: {path: /tmp/canary-passed.txt}}
+      container:
+        image: "{{workflow.parameters.training-image}}"
+        command: [python, -m, src.evaluate_canary]
+        args: [--prometheus-url, "{{workflow.parameters.prometheus-url}}", --service, iris-classifier, --max-p95, "0.5", --max-error-rate, "0.01"]
+
+    - name: promote
+      inputs:
+        parameters: [{name: version}]
+      container:
+        image: "{{workflow.parameters.training-image}}"
+        command: [python, -m, src.promote]
+        args: [--tracking-uri, "{{workflow.parameters.mlflow-tracking-uri}}", --model-name, iris-classifier, --version, "{{inputs.parameters.version}}"]
+
+    - name: rollout
+      inputs:
+        parameters: [{name: traffic}, {name: model-alias}]
+      container:
+        image: bitnami/kubectl:1.33
+        command: [/bin/sh, -ec]
+        args:
+          - |
+            kubectl patch inferenceservice iris-classifier -n mlops --type=json -p="[
+              {\"op\":\"add\",\"path\":\"/spec/predictor/canaryTrafficPercent\",\"value\":{{inputs.parameters.traffic}}},
+              {\"op\":\"replace\",\"path\":\"/spec/predictor/containers/0/env/1/value\",\"value\":\"models:/iris-classifier@{{inputs.parameters.model-alias}}\"}
+            ]"
+            kubectl wait --for=condition=Ready inferenceservice/iris-classifier -n mlops --timeout=10m

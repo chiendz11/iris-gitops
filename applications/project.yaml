@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: iris-production
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-100"
+spec:
+  description: Production Iris MLOps platform
+  sourceRepos:
+    - https://github.com/chiendz11/iris-gitops.git
+    - https://argoproj.github.io/argo-helm
+    - https://charts.external-secrets.io
+    - https://prometheus-community.github.io/helm-charts
+    - ghcr.io/kserve/charts
+  destinations:
+    - namespace: "*"
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: "*"
+      kind: "*"
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"

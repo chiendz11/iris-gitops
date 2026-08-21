@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sqs-eventsource-sa
+  namespace: argo-events
+  annotations:
+    eks.amazonaws.com/role-arn: REPLACE_ARGO_EVENTS_IRSA_ROLE_ARN
+---
+apiVersion: argoproj.io/v1alpha1
+kind: EventSource
+metadata: {name: dataset-sqs, namespace: argo-events}
+spec:
+  eventBusName: default
+  template:
+    serviceAccountName: sqs-eventsource-sa
+  sqs:
+    dataset:
+      jsonBody: true
+      region: ap-southeast-1
+      queue: REPLACE_DATASET_SQS_QUEUE_NAME
+      waitTimeSeconds: 20

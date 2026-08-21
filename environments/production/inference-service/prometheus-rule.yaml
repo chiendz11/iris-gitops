@@ -1,0 +1,25 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: iris-classifier
+  namespace: mlops
+  labels: {release: monitoring}
+spec:
+  groups:
+    - name: iris-serving
+      rules:
+        - alert: IrisInferenceHighP95Latency
+          expr: histogram_quantile(0.95, sum by (le) (rate(iris_prediction_latency_seconds_bucket{service="iris-classifier"}[5m]))) > 0.5
+          for: 10m
+          labels: {severity: warning}
+          annotations: {summary: Iris inference p95 latency exceeds 500 ms}
+        - alert: IrisInferenceHighErrorRate
+          expr: sum(rate(iris_prediction_requests_total{service="iris-classifier",status!="success"}[5m])) / clamp_min(sum(rate(iris_prediction_requests_total{service="iris-classifier"}[5m])), 0.001) > 0.01
+          for: 5m
+          labels: {severity: critical}
+          annotations: {summary: Iris inference error rate exceeds 1%}
+        - alert: IrisInputDataDrift
+          expr: iris_data_drift_detected{service="iris-classifier"} == 1
+          for: 15m
+          labels: {severity: warning}
+          annotations: {summary: Basic input drift threshold exceeded}

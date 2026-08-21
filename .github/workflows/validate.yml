@@ -1,0 +1,35 @@
+name: validate-gitops
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.33.0
+      - name: Build Argo CD applications
+        run: kubectl kustomize applications >/dev/null
+      - name: Build production workloads
+        run: |
+          kubectl kustomize environments/production/model-registry >/dev/null
+          kubectl kustomize environments/production/data-pipeline >/dev/null
+          kubectl kustomize environments/production/inference-service >/dev/null
+      - name: Build Knative platform
+        run: |
+          kubectl kustomize --network platform/knative-crds >/dev/null
+          kubectl kustomize --network platform/knative >/dev/null
+      - name: Require immutable workload images
+        run: |
+          if rg -n 'image: .*:(latest|production)$|newTag: (latest|production)$' environments; then
+            echo "Mutable production image tag detected"
+            exit 1
+          fi

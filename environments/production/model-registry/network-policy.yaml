@@ -1,0 +1,10 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: mlflow, namespace: mlops}
+spec:
+  podSelector: {matchLabels: {app: mlflow}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{namespaceSelector: {}}]
+      ports: [{protocol: TCP, port: 5000}]
+  egress: [{}]

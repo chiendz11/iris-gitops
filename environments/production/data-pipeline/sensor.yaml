@@ -1,0 +1,63 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: dataset-sensor-sa, namespace: argo-events}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: submit-workflows, namespace: argo}
+rules:
+  - apiGroups: [argoproj.io]
+    resources: [workflows]
+    verbs: [create, get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: dataset-sensor-submit, namespace: argo}
+subjects:
+  - {kind: ServiceAccount, name: dataset-sensor-sa, namespace: argo-events}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: submit-workflows}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Sensor
+metadata: {name: dataset-upload, namespace: argo-events}
+spec:
+  eventBusName: default
+  template:
+    serviceAccountName: dataset-sensor-sa
+  dependencies:
+    - {name: dataset-created, eventSourceName: dataset-sqs, eventName: dataset}
+  triggers:
+    - template:
+        name: submit-model-lifecycle
+        k8s:
+          operation: create
+          source:
+            resource:
+              apiVersion: argoproj.io/v1alpha1
+              kind: Workflow
+              metadata: {generateName: iris-lifecycle-, namespace: argo}
+              spec:
+                workflowTemplateRef: {name: iris-model-lifecycle}
+                arguments:
+                  parameters:
+                    - {name: dataset-bucket}
+                    - {name: dataset-key}
+                    - {name: dataset-version}
+                    - {name: training-image}
+          parameters:
+            - src:
+                dependencyName: dataset-created
+                dataTemplate: "{{ (index .Input.body.Records 0).s3.bucket.name }}"
+              dest: spec.arguments.parameters.0.value
+            - src:
+                dependencyName: dataset-created
+                dataTemplate: "{{ (index .Input.body.Records 0).s3.object.key }}"
+              dest: spec.arguments.parameters.1.value
+            - src:
+                dependencyName: dataset-created
+                dataTemplate: "{{ (index .Input.body.Records 0).s3.object.eTag }}"
+              dest: spec.arguments.parameters.2.value
+            - src:
+                dependencyName: dataset-created
+                dataTemplate: "REPLACE_ECR_TRAINING_REPOSITORY:{{ index (splitList \"/\" (index .Input.body.Records 0).s3.object.key) 1 }}"
+              dest: spec.arguments.parameters.3.value

@@ -1,0 +1,17 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: workload-data-pipeline
+  namespace: argocd
+  annotations: {argocd.argoproj.io/sync-wave: "10"}
+spec:
+  project: iris-production
+  source:
+    repoURL: https://github.com/chiendz11/iris-gitops.git
+    targetRevision: main
+    path: environments/production/data-pipeline
+  destination: {server: "https://kubernetes.default.svc", namespace: argo}
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [CreateNamespace=true, ServerSideApply=true]
+    retry: {limit: 10}
