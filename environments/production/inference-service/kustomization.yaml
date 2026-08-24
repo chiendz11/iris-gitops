@@ -3,6 +3,7 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - inferenceservice.yaml
+  - domain-mapping.yaml
   - podmonitor.yaml
   - prometheus-rule.yaml
   - grafana-dashboard.yaml

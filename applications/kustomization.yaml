@@ -6,6 +6,8 @@ resources:
   - platform-argo-events.yaml
   - platform-external-secrets.yaml
   - platform-monitoring.yaml
+  - platform-aws-load-balancer-controller.yaml
+  - platform-external-dns.yaml
   - platform-knative-crds.yaml
   - platform-knative.yaml
   - platform-kserve-crd.yaml

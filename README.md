@@ -28,10 +28,11 @@ Argo CD sync waves đảm bảo CRD/controller có trước custom resource.
 
 ## Bootstrap
 
-1. Apply Terraform ở repo `iris-model-registry`.
-2. Thay toàn bộ giá trị `REPLACE_...` bằng output Terraform/ECR thực tế.
-3. Cấu hình Git repository credential nếu repo chuyển thành private.
-4. Chạy:
+1. Bootstrap và merge platform ở repo `iris-infrastructure`.
+2. Workflow hạ tầng tự mở PR thay output Terraform không nhạy cảm trong repo này.
+3. Review/merge PR output; image placeholder được ba application repo cập nhật bằng PR riêng.
+4. Cấu hình Git repository credential nếu repo chuyển thành private.
+5. Chạy:
 
 ```bash
 export EKS_CLUSTER_NAME=iris-mlops-prod
@@ -40,6 +41,8 @@ export AWS_REGION=ap-southeast-1
 ```
 
 Sau bootstrap, không apply workload bằng tay. Mọi thay đổi production đi qua pull request repo này.
+AWS Load Balancer Controller tạo NLB cho Kourier; ExternalDNS tự reconcile hostname phẳng với
+Route53 nên không có lần Terraform apply thứ hai.
 
 ## Biến GitHub của ba app repo
 

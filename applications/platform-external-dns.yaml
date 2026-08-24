@@ -1,0 +1,37 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-external-dns
+  namespace: argocd
+  annotations: {argocd.argoproj.io/sync-wave: "-36"}
+spec:
+  project: iris-production
+  source:
+    repoURL: https://kubernetes-sigs.github.io/external-dns/
+    chart: external-dns
+    targetRevision: 1.21.1
+    helm:
+      releaseName: external-dns
+      valuesObject:
+        provider:
+          name: aws
+        sources: [service]
+        policy: sync
+        registry: txt
+        txtOwnerId: iris-mlops-prod
+        domainFilters:
+          - REPLACE_PUBLIC_DOMAIN_NAME
+        extraArgs:
+          aws-zone-type: public
+          zone-id-filter: REPLACE_ROUTE53_ZONE_ID
+        serviceAccount:
+          create: true
+          name: external-dns
+          annotations:
+            eks.amazonaws.com/role-arn: REPLACE_EXTERNAL_DNS_IRSA_ROLE_ARN
+            eks.amazonaws.com/sts-regional-endpoints: "true"
+  destination: {server: "https://kubernetes.default.svc", namespace: external-dns}
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [CreateNamespace=true, ServerSideApply=true]
+    retry: {limit: 10}

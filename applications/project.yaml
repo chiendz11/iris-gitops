@@ -12,6 +12,8 @@ spec:
     - https://argoproj.github.io/argo-helm
     - https://charts.external-secrets.io
     - https://prometheus-community.github.io/helm-charts
+    - https://aws.github.io/eks-charts
+    - https://kubernetes-sigs.github.io/external-dns/
     - ghcr.io/kserve/charts
   destinations:
     - namespace: "*"
