@@ -5,6 +5,7 @@ metadata:
   namespace: argocd
   annotations:
     argocd.argoproj.io/sync-wave: "-100"
+    argocd.argoproj.io/sync-options: Prune=false
 spec:
   description: Production Iris MLOps platform
   sourceRepos:
@@ -24,3 +25,5 @@ spec:
   namespaceResourceWhitelist:
     - group: "*"
       kind: "*"
+  orphanedResources:
+    warn: true

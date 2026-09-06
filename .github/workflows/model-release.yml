@@ -1,0 +1,126 @@
+name: model-release
+
+on:
+  repository_dispatch:
+    types: [model_release]
+
+# Only a reviewed workflow on the default branch can exchange GitHub OIDC for
+# the narrowly-scoped secret-reader role. Kubernetes never receives AWS admin.
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: model-release-production
+  cancel-in-progress: false
+
+jobs:
+  propose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      ACTION: ${{ github.event.client_payload.action }}
+      MODEL_VERSION: ${{ github.event.client_payload.model_version }}
+      CHANGE_ID: ${{ github.event.client_payload.change_id }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      MODEL_PROMOTION_AWS_ROLE_ARN: ${{ vars.MODEL_PROMOTION_AWS_ROLE_ARN }}
+      MODEL_PROMOTION_SECRET_ARN: ${{ vars.MODEL_PROMOTION_SECRET_ARN }}
+      INFERENCE_MANIFEST: environments/production/inference-service/inferenceservice.yaml
+    steps:
+      - name: Validate release-intent contract
+        run: |
+          set -euo pipefail
+          [[ "${ACTION}" =~ ^(bootstrap|canary|promote|rollback)$ ]]
+          [[ "${MODEL_VERSION}" =~ ^[0-9]+$ ]]
+          [[ "${CHANGE_ID}" =~ ^[A-Za-z0-9._-]+$ ]]
+          test -n "${AWS_REGION}"
+          test -n "${MODEL_PROMOTION_AWS_ROLE_ARN}"
+          test -n "${MODEL_PROMOTION_SECRET_ARN}"
+
+      - name: Assume model-promotion secret-reader role
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: ${{ env.MODEL_PROMOTION_AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Read model-promoter App credential
+        id: app-credential
+        env:
+          SECRET_ARN: ${{ env.MODEL_PROMOTION_SECRET_ARN }}
+        run: |
+          set -euo pipefail
+          secret_json="$(aws secretsmanager get-secret-value \
+            --secret-id "${SECRET_ARN}" --query SecretString --output text)"
+          client_id="$(jq -er '.client_id' <<<"${secret_json}")"
+          private_key="$(jq -er '.private_key' <<<"${secret_json}")"
+          echo "::add-mask::${client_id}"
+          while IFS= read -r line; do echo "::add-mask::${line}"; done <<<"${private_key}"
+          delimiter="APP_KEY_${RANDOM}_${RANDOM}"
+          {
+            echo "client_id=${client_id}"
+            echo "private_key<<${delimiter}"
+            printf '%s\n' "${private_key}"
+            echo "${delimiter}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Mint short-lived GitOps mutation token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ steps.app-credential.outputs.client_id }}
+          private-key: ${{ steps.app-credential.outputs.private_key }}
+          owner: ${{ github.repository_owner }}
+          repositories: iris-gitops
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Checkout GitOps desired state
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install pinned renderer dependencies
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - run: pip install PyYAML==6.0.3
+
+      - name: Create or resume protected rollout pull request
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          safe_change_id="${CHANGE_ID//./-}"
+          branch="model/iris-v${MODEL_VERSION}-${ACTION}-${safe_change_id:0:24}"
+          existing_url="$(gh pr list --state open --head "${branch}" --json url --jq '.[0].url // ""')"
+
+          if [[ -n "${existing_url}" ]]; then
+            echo "Resuming ${existing_url}"
+            exit 0
+          fi
+
+          git checkout -B "${branch}" origin/main
+          python .github/scripts/model_rollout.py \
+            --manifest "${INFERENCE_MANIFEST}" \
+            --model-version "${MODEL_VERSION}" \
+            --action "${ACTION}"
+
+          if git diff --quiet -- "${INFERENCE_MANIFEST}"; then
+            echo "Production desired state already matches this release intent."
+            exit 0
+          fi
+
+          git config user.name "iris-model-promoter[bot]"
+          git config user.email "iris-model-promoter[bot]@users.noreply.github.com"
+          git add -- "${INFERENCE_MANIFEST}"
+          git commit -m "deploy(model): ${ACTION} Iris v${MODEL_VERSION}"
+          gh auth setup-git
+          git push --force-with-lease origin "${branch}"
+          pr_url="$(gh pr create \
+            --base main \
+            --head "${branch}" \
+            --title "deploy(model): ${ACTION} Iris v${MODEL_VERSION}" \
+            --body "Argo lifecycle \`${CHANGE_ID}\` requested \`${ACTION}\` for immutable MLflow model version \`${MODEL_VERSION}\`. The GitOps validate check and CODEOWNER approval remain mandatory.")"
+          echo "Created ${pr_url}"

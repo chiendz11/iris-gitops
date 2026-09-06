@@ -1,0 +1,156 @@
+name: dispatcher-image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - automation/model-release-dispatcher/**
+      - .github/workflows/dispatcher-image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: dispatcher-image-production
+  cancel-in-progress: false
+
+jobs:
+  publish-and-propose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      PUBLISH_ROLE_ARN: ${{ vars.DISPATCHER_PUBLISH_AWS_ROLE_ARN }}
+      PROMOTION_ROLE_ARN: ${{ vars.MODEL_PROMOTION_AWS_ROLE_ARN }}
+      PROMOTION_SECRET_ARN: ${{ vars.MODEL_PROMOTION_SECRET_ARN }}
+      ECR_REPOSITORY: ${{ vars.DISPATCHER_ECR_REPOSITORY }}
+      INFERENCE_WORKFLOW: environments/production/data-pipeline/workflow-template.yaml
+    steps:
+      - name: Validate automation configuration
+        run: |
+          set -euo pipefail
+          test -n "${AWS_REGION}"
+          test -n "${PUBLISH_ROLE_ARN}"
+          test -n "${PROMOTION_ROLE_ARN}"
+          test -n "${PROMOTION_SECRET_ARN}"
+          test -n "${ECR_REPOSITORY}"
+
+      - name: Checkout reviewed dispatcher source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Assume dispatcher publisher role
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: ${{ env.PUBLISH_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
+
+      - name: Publish immutable dispatcher image
+        id: publish
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          existing_digest="$(aws ecr describe-images \
+            --repository-name "${ECR_REPOSITORY}" \
+            --image-ids imageTag="${GITHUB_SHA}" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text 2>/dev/null || true)"
+
+          if [[ -z "${existing_digest}" || "${existing_digest}" == None ]]; then
+            image_tag="${REGISTRY}/${ECR_REPOSITORY}:${GITHUB_SHA}"
+            docker build \
+              --file automation/model-release-dispatcher/Dockerfile \
+              --tag "${image_tag}" \
+              automation/model-release-dispatcher
+            docker push "${image_tag}"
+            existing_digest="$(aws ecr describe-images \
+              --repository-name "${ECR_REPOSITORY}" \
+              --image-ids imageTag="${GITHUB_SHA}" \
+              --query 'imageDetails[0].imageDigest' \
+              --output text)"
+          fi
+
+          [[ "${existing_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "image=${REGISTRY}/${ECR_REPOSITORY}@${existing_digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Assume model-promotion secret-reader role
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: ${{ env.PROMOTION_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          unset-current-credentials: true
+
+      - name: Read model-promoter App credential
+        id: app-credential
+        env:
+          SECRET_ARN: ${{ env.PROMOTION_SECRET_ARN }}
+        run: |
+          set -euo pipefail
+          secret_json="$(aws secretsmanager get-secret-value \
+            --secret-id "${SECRET_ARN}" --query SecretString --output text)"
+          client_id="$(jq -er '.client_id' <<<"${secret_json}")"
+          private_key="$(jq -er '.private_key' <<<"${secret_json}")"
+          echo "::add-mask::${client_id}"
+          while IFS= read -r line; do echo "::add-mask::${line}"; done <<<"${private_key}"
+          delimiter="APP_KEY_${RANDOM}_${RANDOM}"
+          {
+            echo "client_id=${client_id}"
+            echo "private_key<<${delimiter}"
+            printf '%s\n' "${private_key}"
+            echo "${delimiter}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Mint short-lived GitOps pull-request token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ steps.app-credential.outputs.client_id }}
+          private-key: ${{ steps.app-credential.outputs.private_key }}
+          owner: ${{ github.repository_owner }}
+          repositories: iris-gitops
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Open dispatcher digest pull request
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          DISPATCHER_IMAGE: ${{ steps.publish.outputs.image }}
+        run: |
+          set -euo pipefail
+          short_sha="${GITHUB_SHA:0:12}"
+          branch="automation/dispatcher-${short_sha}"
+          existing_url="$(gh pr list --state open --head "${branch}" --json url --jq '.[0].url // ""')"
+          if [[ -n "${existing_url}" ]]; then
+            echo "Dispatcher digest PR already exists: ${existing_url}"
+            exit 0
+          fi
+
+          git checkout -B "${branch}" origin/main
+          python .github/scripts/update_dispatcher_image.py \
+            --manifest "${INFERENCE_WORKFLOW}" \
+            --image "${DISPATCHER_IMAGE}"
+          if git diff --quiet -- "${INFERENCE_WORKFLOW}"; then
+            echo "WorkflowTemplate already pins ${DISPATCHER_IMAGE}."
+            exit 0
+          fi
+
+          git config user.name "iris-model-promoter[bot]"
+          git config user.email "iris-model-promoter[bot]@users.noreply.github.com"
+          git add -- "${INFERENCE_WORKFLOW}"
+          git commit -m "deploy(dispatcher): pin ${short_sha} by digest"
+          gh auth setup-git
+          git push --force-with-lease origin "${branch}"
+          gh pr create \
+            --base main \
+            --head "${branch}" \
+            --title "deploy(dispatcher): pin ${short_sha} by digest" \
+            --body "Pins the reviewed dispatcher built from \`${GITHUB_SHA}\` to immutable image \`${DISPATCHER_IMAGE}\`. Validation and CODEOWNER approval remain mandatory."

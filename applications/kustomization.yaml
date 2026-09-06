@@ -5,7 +5,9 @@ resources:
   - platform-argo-workflows.yaml
   - platform-argo-events.yaml
   - platform-external-secrets.yaml
+  - platform-external-secrets-config.yaml
   - platform-monitoring.yaml
+  - platform-argocd-monitoring.yaml
   - platform-aws-load-balancer-controller.yaml
   - platform-external-dns.yaml
   - platform-knative-crds.yaml

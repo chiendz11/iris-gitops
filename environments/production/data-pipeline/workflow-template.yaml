@@ -4,15 +4,21 @@ metadata: {name: iris-model-lifecycle, namespace: argo}
 spec:
   serviceAccountName: iris-training
   entrypoint: lifecycle
+  activeDeadlineSeconds: 28800
+  synchronization:
+    mutex:
+      name: iris-model-promotion
   arguments:
     parameters:
       - {name: training-image, value: REPLACE_ECR_TRAINING_IMAGE}
+      - {name: dispatcher-image, value: DISPATCHER_IMAGE_NOT_PUBLISHED}
       - {name: dataset-bucket, value: REPLACE_DVC_BUCKET}
       - {name: dataset-key, value: datasets/iris.csv}
       - {name: dataset-version, value: unknown}
       - {name: mlflow-tracking-uri, value: "http://mlflow.mlops.svc.cluster.local:5000"}
       - {name: prometheus-url, value: "http://monitoring-kube-prometheus-prometheus.monitoring.svc:9090"}
       - {name: inference-url, value: "http://iris-classifier-predictor.mlops.svc.cluster.local/v1/models/iris-classifier:predict"}
+      - {name: gitops-repository, value: chiendz11/iris-gitops}
   volumeClaimTemplates:
     - metadata: {name: workspace}
       spec:
@@ -23,53 +29,81 @@ spec:
       dag:
         tasks:
           - {name: fetch-dataset, template: fetch}
-          - {name: train, dependencies: [fetch-dataset], template: train}
-          - name: canary-10
-            dependencies: [train]
+          - {name: train, depends: fetch-dataset.Succeeded, template: train}
+          - name: propose-canary-10
+            depends: train.Succeeded
             when: "'{{tasks.train.outputs.parameters.quality-gate}}' == 'true' && '{{tasks.train.outputs.parameters.bootstrap-required}}' == 'false'"
-            template: rollout
+            template: dispatch-release
+            arguments:
+              parameters:
+                - {name: action, value: canary}
+                - {name: version, value: "{{tasks.train.outputs.parameters.model-version}}"}
+          - name: wait-canary-10
+            depends: propose-canary-10.Succeeded
+            template: wait-rollout
             arguments:
               parameters:
                 - {name: traffic, value: "10"}
-                - {name: model-alias, value: candidate}
+                - {name: version, value: "{{tasks.train.outputs.parameters.model-version}}"}
           - name: bootstrap-promote
-            dependencies: [train]
+            depends: train.Succeeded
             when: "'{{tasks.train.outputs.parameters.bootstrap-required}}' == 'true'"
             template: promote
             arguments:
               parameters:
                 - {name: version, value: "{{tasks.train.outputs.parameters.model-version}}"}
-          - name: bootstrap-rollout
-            dependencies: [bootstrap-promote]
-            template: rollout
+          - name: propose-bootstrap-rollout
+            depends: bootstrap-promote.Succeeded
+            template: dispatch-release
             arguments:
               parameters:
-                - {name: traffic, value: "100"}
-                - {name: model-alias, value: champion}
-          - {name: generate-traffic, dependencies: [canary-10], template: smoke}
-          - {name: observe-canary, dependencies: [generate-traffic], template: observe}
+                - {name: action, value: bootstrap}
+                - {name: version, value: "{{tasks.train.outputs.parameters.model-version}}"}
+          - name: wait-bootstrap-rollout
+            depends: propose-bootstrap-rollout.Succeeded
+            template: wait-rollout
+            arguments:
+              parameters:
+                - {name: traffic, value: absent}
+                - {name: version, value: "{{tasks.train.outputs.parameters.model-version}}"}
+          - {name: generate-traffic, depends: wait-canary-10.Succeeded, template: smoke}
+          - {name: observe-canary, depends: generate-traffic.Succeeded, template: observe}
           - name: promote-registry
-            dependencies: [observe-canary]
+            depends: observe-canary.Succeeded
             when: "'{{tasks.observe-canary.outputs.parameters.passed}}' == 'true'"
             template: promote
             arguments:
               parameters:
                 - {name: version, value: "{{tasks.train.outputs.parameters.model-version}}"}
-          - name: rollout-100
-            dependencies: [promote-registry]
-            template: rollout
+          - name: propose-rollout-100
+            depends: promote-registry.Succeeded
+            template: dispatch-release
             arguments:
               parameters:
-                - {name: traffic, value: "100"}
-                - {name: model-alias, value: champion}
-          - name: rollback
-            dependencies: [observe-canary]
+                - {name: action, value: promote}
+                - {name: version, value: "{{tasks.train.outputs.parameters.model-version}}"}
+          - name: wait-rollout-100
+            depends: propose-rollout-100.Succeeded
+            template: wait-rollout
+            arguments:
+              parameters:
+                - {name: traffic, value: absent}
+                - {name: version, value: "{{tasks.train.outputs.parameters.model-version}}"}
+          - name: propose-rollback
+            depends: observe-canary.Succeeded
             when: "'{{tasks.observe-canary.outputs.parameters.passed}}' != 'true'"
-            template: rollout
+            template: dispatch-release
+            arguments:
+              parameters:
+                - {name: action, value: rollback}
+                - {name: version, value: "{{tasks.train.outputs.parameters.model-version}}"}
+          - name: wait-rollback
+            depends: propose-rollback.Succeeded
+            template: wait-rollout
             arguments:
               parameters:
                 - {name: traffic, value: "0"}
-                - {name: model-alias, value: champion}
+                - {name: version, value: "{{tasks.train.outputs.parameters.model-version}}"}
 
     - name: fetch
       container:
@@ -122,16 +156,61 @@ spec:
         command: [python, -m, src.promote]
         args: [--tracking-uri, "{{workflow.parameters.mlflow-tracking-uri}}", --model-name, iris-classifier, --version, "{{inputs.parameters.version}}"]
 
-    - name: rollout
+    - name: dispatch-release
       inputs:
-        parameters: [{name: traffic}, {name: model-alias}]
+        parameters: [{name: action}, {name: version}]
+      container:
+        image: "{{workflow.parameters.dispatcher-image}}"
+        command: [python, -m, dispatcher]
+        args:
+          - --repository
+          - "{{workflow.parameters.gitops-repository}}"
+          - --model-version
+          - "{{inputs.parameters.version}}"
+          - --action
+          - "{{inputs.parameters.action}}"
+          - --change-id
+          - "{{workflow.uid}}"
+        env:
+          - name: GITHUB_APP_CLIENT_ID
+            valueFrom:
+              secretKeyRef: {name: model-promotion-github-app, key: client_id}
+          - name: GITHUB_APP_PRIVATE_KEY
+            valueFrom:
+              secretKeyRef: {name: model-promotion-github-app, key: private_key}
+
+    - name: wait-rollout
+      inputs:
+        parameters: [{name: traffic}, {name: version}]
       container:
         image: bitnami/kubectl:1.33
         command: [/bin/sh, -ec]
         args:
           - |
-            kubectl patch inferenceservice iris-classifier -n mlops --type=json -p="[
-              {\"op\":\"add\",\"path\":\"/spec/predictor/canaryTrafficPercent\",\"value\":{{inputs.parameters.traffic}}},
-              {\"op\":\"replace\",\"path\":\"/spec/predictor/containers/0/env/1/value\",\"value\":\"models:/iris-classifier@{{inputs.parameters.model-alias}}\"}
-            ]"
-            kubectl wait --for=condition=Ready inferenceservice/iris-classifier -n mlops --timeout=10m
+            expected_uri="models:/iris-classifier/{{inputs.parameters.version}}"
+            expected_traffic="{{inputs.parameters.traffic}}"
+            deadline="$(( $(date +%s) + 21600 ))"
+            while [ "$(date +%s)" -lt "${deadline}" ]; do
+              actual_uri="$(kubectl get inferenceservice iris-classifier -n mlops \
+                -o jsonpath='{.spec.predictor.containers[0].env[?(@.name=="MODEL_URI")].value}' 2>/dev/null || true)"
+              actual_traffic="$(kubectl get inferenceservice iris-classifier -n mlops \
+                -o jsonpath='{.spec.predictor.canaryTrafficPercent}' 2>/dev/null || true)"
+              generation="$(kubectl get inferenceservice iris-classifier -n mlops \
+                -o jsonpath='{.metadata.generation}' 2>/dev/null || true)"
+              observed_generation="$(kubectl get inferenceservice iris-classifier -n mlops \
+                -o jsonpath='{.status.observedGeneration}' 2>/dev/null || true)"
+              ready="$(kubectl get inferenceservice iris-classifier -n mlops \
+                -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+              if [ "${actual_uri}" = "${expected_uri}" ] && \
+                 { [ "${expected_traffic}" = absent ] && [ -z "${actual_traffic}" ] || \
+                   [ "${actual_traffic}" = "${expected_traffic}" ]; } && \
+                 [ -n "${generation}" ] && [ "${observed_generation}" = "${generation}" ] && \
+                 [ "${ready}" = True ]; then
+                echo "KServe reconciled generation ${generation} and reports Ready."
+                exit 0
+              fi
+              echo "Waiting for Argo CD to reconcile model=${expected_uri} traffic=${expected_traffic}"
+              sleep 10
+            done
+            echo "Timed out waiting for the GitOps rollout to reach the cluster." >&2
+            exit 1
