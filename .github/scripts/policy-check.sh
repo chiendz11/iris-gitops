@@ -80,22 +80,69 @@ while IFS= read -r application; do
   fi
 done < <(find applications -maxdepth 1 -type f -name '*.yaml' -exec grep -l '^kind: Application$' {} + | sort)
 
-# Existing bootstrap placeholders are transitional. No PR may add or reintroduce one;
-# once infrastructure/application automation removes them, this rule keeps them out.
+# Existing bootstrap placeholders are transitional. The first platform-adoption PR
+# may introduce only the explicitly listed infrastructure outputs. Afterwards no PR
+# may add or reintroduce one; automation must resolve them through a protected PR.
 if [[ -n "${base_sha}" && "${base_sha}" != 0000000000000000000000000000000000000000 ]] && \
    git cat-file -e "${base_sha}^{commit}" 2>/dev/null && \
    git cat-file -e "${head_sha}^{commit}" 2>/dev/null; then
-  added_placeholders="$({
+  initial_platform_adoption=false
+  if ! git cat-file -e \
+    "${base_sha}:applications/platform-aws-load-balancer-controller.yaml" \
+    2>/dev/null; then
+    initial_platform_adoption=true
+  fi
+
+  current_file=""
+  while IFS= read -r diff_line; do
+    case "${diff_line}" in
+      '+++ b/'*)
+        current_file="${diff_line#+++ b/}"
+        ;;
+      +*)
+        [[ "${diff_line}" == '+++'* ]] && continue
+        [[ "${diff_line}" =~ (REPLACE_[A-Z0-9_]+) ]] || continue
+        placeholder="${BASH_REMATCH[1]}"
+
+        # Example manifests are documentation and are not part of any Kustomize root.
+        if [[ "${current_file}" == platform/external-secrets-config/examples/* ]]; then
+          continue
+        fi
+
+        allowed_initial_placeholder=false
+        if [[ "${initial_platform_adoption}" == true ]]; then
+          case "${current_file}:${placeholder}" in
+            applications/platform-aws-load-balancer-controller.yaml:REPLACE_EKS_CLUSTER_NAME | \
+            applications/platform-aws-load-balancer-controller.yaml:REPLACE_VPC_ID | \
+            applications/platform-aws-load-balancer-controller.yaml:REPLACE_AWS_LOAD_BALANCER_CONTROLLER_ROLE_ARN | \
+            applications/platform-external-dns.yaml:REPLACE_PUBLIC_DOMAIN_NAME | \
+            applications/platform-external-dns.yaml:REPLACE_ROUTE53_ZONE_ID | \
+            applications/platform-external-dns.yaml:REPLACE_EXTERNAL_DNS_IRSA_ROLE_ARN | \
+            environments/production/inference-service/domain-mapping.yaml:REPLACE_KSERVE_HOSTNAME | \
+            platform/knative/kustomization.yaml:REPLACE_PUBLIC_ACM_CERTIFICATE_ARN | \
+            platform/knative/kustomization.yaml:REPLACE_KSERVE_HOSTNAME)
+              allowed_initial_placeholder=true
+              ;;
+          esac
+        fi
+
+        if [[ "${allowed_initial_placeholder}" == true ]]; then
+          warning "${current_file}: allowing ${placeholder} during the one-time platform adoption."
+        else
+          printf '%s:%s\n' "${current_file}" "${diff_line}"
+          error "This change introduces ${placeholder} into production desired state."
+        fi
+        ;;
+    esac
+  done < <(
     git diff --unified=0 "${base_sha}" "${head_sha}" -- \
       applications platform environments/production || true
-  } | awk '/^\+[^+]/ && /REPLACE_[A-Z0-9_]+/ { print }')"
-  if [[ -n "${added_placeholders}" ]]; then
-    printf '%s\n' "${added_placeholders}"
-    error "This change introduces a REPLACE_* placeholder into production desired state."
-  fi
+  )
 fi
 
-placeholder_matches="$(rg -n 'REPLACE_[A-Z0-9_]+' applications platform environments/production || true)"
+placeholder_matches="$(rg -n \
+  --glob '!platform/external-secrets-config/examples/**' \
+  'REPLACE_[A-Z0-9_]+' applications platform environments/production || true)"
 if [[ -n "${placeholder_matches}" ]]; then
   placeholder_count="$(printf '%s\n' "${placeholder_matches}" | wc -l | xargs)"
   warning "${placeholder_count} transitional REPLACE_* line(s) remain; infrastructure or application promotion PRs must resolve them before first production sync."
