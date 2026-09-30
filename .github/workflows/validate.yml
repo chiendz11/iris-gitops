@@ -24,23 +24,51 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
       - run: >-
-          pip install PyYAML==6.0.3 pytest==8.4.2 ruff==0.14.3
-          -r automation/model-release-dispatcher/requirements.txt
-      - run: >-
-          ruff check .github/scripts .github/tests
-          automation/model-release-dispatcher
-      - run: >-
-          PYTHONPATH=.github:automation/model-release-dispatcher pytest -q
-          .github/tests automation/model-release-dispatcher/tests
-      - name: Build dispatcher image without publishing
-        run: >-
-          docker build
-          --file automation/model-release-dispatcher/Dockerfile
-          automation/model-release-dispatcher
+          pip install jsonschema==4.25.1 PyJWT[crypto]==2.10.1
+          PyYAML==6.0.3 pytest==8.4.2 requests==2.32.5 ruff==0.14.3
+      - name: Install policy regression test dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ripgrep
+      - run: ruff check automation
+      - run: PYTHONPATH=. pytest -q automation
+      - name: Lint lifecycle with the pinned Argo controller version (offline)
+        env:
+          ARGO_VERSION: v4.1.2
+          ARGO_BINARY_SHA256: c7c3c70f8d7b3bcf07f3381af80280c702524209fd6d36accb671dc7d63dcc91
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error \
+            "https://github.com/argoproj/argo-workflows/releases/download/${ARGO_VERSION}/argo-linux-amd64.gz" \
+            --output "${RUNNER_TEMP}/argo.gz"
+          gzip --decompress --stdout "${RUNNER_TEMP}/argo.gz" > "${RUNNER_TEMP}/argo"
+          echo "${ARGO_BINARY_SHA256}  ${RUNNER_TEMP}/argo" | sha256sum --check
+          chmod u+x "${RUNNER_TEMP}/argo"
+          "${RUNNER_TEMP}/argo" lint --offline --strict environments/production/data-pipeline/workflow-template.yaml
+      - name: Refuse stale recovery proposals
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: python -m automation.recovery.check_pr --base "${BASE_SHA}"
+      - name: Validate every versioned JSON Schema
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from jsonschema import Draft202012Validator
+
+          for path in sorted(Path("contracts").rglob("*.schema.json")):
+              Draft202012Validator.check_schema(json.loads(path.read_text()))
+              print(path)
+          PY
+      - name: Build release-automation image without publishing
+        run: docker build --file automation/model_release/Dockerfile .
 
   render-schema:
     name: render-schema
@@ -53,7 +81,7 @@ jobs:
       - name: Install kubectl
         uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4
         with:
-          version: v1.33.0
+          version: v1.34.0
 
       - name: Install kubeconform
         env:
@@ -93,7 +121,7 @@ jobs:
             -strict \
             -summary \
             -ignore-missing-schemas \
-            -kubernetes-version 1.33.0 \
+            -kubernetes-version 1.34.0 \
             "${RUNNER_TEMP}/rendered"
 
   policy:

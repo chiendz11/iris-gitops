@@ -1,0 +1,23 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: iris-lifecycle-recovery
+  namespace: argo
+  labels: {release: monitoring}
+spec:
+  groups:
+    - name: iris-lifecycle
+      rules:
+        - alert: IrisLifecycleNeedsInvestigation
+          expr: (increase(argo_workflows_iris_model_lifecycle_failures_total[15m]) > 0) or ((argo_workflows_iris_model_lifecycle_failures_total > 0) unless argo_workflows_iris_model_lifecycle_failures_total offset 15m)
+          labels: {severity: warning}
+          annotations:
+            summary: Iris lifecycle failed; serving has NOT necessarily rolled back
+            description: Inspect the failed Argo task, live model/traffic and GitOps PRs. Follow docs/RECOVERY.md. Do not promote without complete telemetry.
+        - alert: IrisWorkflowControllerMetricsUnavailable
+          expr: absent(up{namespace="argo",service=~".*workflow-controller.*"}) or max(up{namespace="argo",service=~".*workflow-controller.*"}) == 0
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: Cannot observe the Iris workflow controller
+            description: Restore monitoring before accepting a candidate. Check Argo directly if Prometheus itself is unavailable.

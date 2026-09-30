@@ -3,4 +3,5 @@ kind: EventBus
 metadata: {name: default, namespace: argo-events}
 spec:
   jetstream:
-    version: latest
+    # Must match a version explicitly supported by the pinned argo-events chart.
+    version: 2.10.10

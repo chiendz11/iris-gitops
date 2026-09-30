@@ -1,0 +1,157 @@
+name: operator-recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      component:
+        description: Recover a model or an image plus its compatible non-secret config
+        required: true
+        type: choice
+        options: [model, inference, model-registry]
+      target_git_sha:
+        description: Full GitOps main commit SHA containing the known-good desired release
+        required: true
+        type: string
+      expected_main_sha:
+        description: Full current main SHA that you inspected (stale requests are rejected)
+        required: true
+        type: string
+      schema_version:
+        description: Approved config schema of the target workload (ignored for model)
+        default: v1
+        type: string
+      reason:
+        description: Incident reason (10+ characters, no secrets)
+        required: true
+        type: string
+      evidence:
+        description: Evidence of artifact availability, compatibility and known-good health
+        required: true
+        type: string
+      preflight_confirmed:
+        description: I paused new releases, stopped active lifecycle runs and verified the target; see docs/RECOVERY.md
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: inference-desired-state-production
+  cancel-in-progress: false
+
+jobs:
+  propose:
+    # This is a solo-operator PR factory, not a deployment job. Merge is the gate.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      COMPONENT: ${{ inputs.component }}
+      TARGET_SHA: ${{ inputs.target_git_sha }}
+      EXPECTED_SHA: ${{ inputs.expected_main_sha }}
+      SCHEMA_VERSION: ${{ inputs.schema_version }}
+      RECOVERY_REASON: ${{ inputs.reason }}
+      RECOVERY_EVIDENCE: ${{ inputs.evidence }}
+    steps:
+      - name: Authorize the operator without weakening publisher App checks
+        env:
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          OWNER: ${{ github.repository_owner }}
+          PREFLIGHT: ${{ inputs.preflight_confirmed }}
+        run: |
+          set -euo pipefail
+          test "${ACTOR}" = "${OWNER}"
+          test "${TRIGGERING_ACTOR}" = "${OWNER}"
+          test "${PREFLIGHT}" = true
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - run: pip install jsonschema==4.25.1 PyYAML==6.0.3
+
+      - name: Resolve only allow-listed fields from historical Git data
+        id: target
+        run: |
+          set -euo pipefail
+          python -m automation.recovery.renderer \
+            --component "${COMPONENT}" --target-git-sha "${TARGET_SHA}" \
+            --expected-main-sha "${EXPECTED_SHA}" --schema-version "${SCHEMA_VERSION}" \
+            --reason "${RECOVERY_REASON}" --evidence "${RECOVERY_EVIDENCE}" \
+            > "${RUNNER_TEMP}/recovery.json"
+          echo "image_ref=$(jq -r '.image_ref // ""' "${RUNNER_TEMP}/recovery.json")" >> "${GITHUB_OUTPUT}"
+
+      - name: Mint GitOps-owned PR token through existing main-bound OIDC
+        id: token
+        uses: ./.github/actions/gitops-automation-token
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          role-arn: ${{ vars.GITOPS_AUTOMATION_AWS_ROLE_ARN }}
+          secret-arn: ${{ vars.GITOPS_AUTOMATION_SECRET_ARN }}
+          owner: ${{ github.repository_owner }}
+          repository: iris-gitops
+
+      - name: Refuse overlapping release and recovery proposals
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          count="$(gh pr list --state open --limit 1000 --json headRefName \
+            --jq '[.[] | select((.headRefName | startswith("release/")) or (.headRefName | startswith("recovery/")))] | length')"
+          test "${count}" = 0 || { echo "Resolve open release/recovery PRs first." >&2; exit 1; }
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        if: inputs.component != 'model'
+      - name: Verify target image exists and retains the approved producer signature
+        if: inputs.component != 'model'
+        env:
+          IMAGE_REF: ${{ steps.target.outputs.image_ref }}
+        run: |
+          set -euo pipefail
+          case "${COMPONENT}" in
+            inference) producer=iris-inference-service ;;
+            model-registry) producer=iris-model-registry ;;
+            *) exit 1 ;;
+          esac
+          registry="${IMAGE_REF%%/*}"
+          aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${registry}"
+          cosign verify \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY_OWNER}/${producer}/.github/workflows/ci.yml@refs/heads/main" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${IMAGE_REF}" > /dev/null
+
+      - name: Render and open a recovery PR, never merge or deploy
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "${EXPECTED_SHA}"
+          branch="recovery/${COMPONENT}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git switch -c "${branch}"
+          python -m automation.recovery.renderer \
+            --component "${COMPONENT}" --target-git-sha "${TARGET_SHA}" \
+            --expected-main-sha "${EXPECTED_SHA}" --schema-version "${SCHEMA_VERSION}" \
+            --reason "${RECOVERY_REASON}" --evidence "${RECOVERY_EVIDENCE}" --render
+          git config user.name 'iris-gitops-automation[bot]'
+          git config user.email 'iris-gitops-automation[bot]@users.noreply.github.com'
+          git add -- environments/production state/recovery-lock.json
+          git commit -m "recovery(${COMPONENT}): restore selected known-good release"
+          git push origin "${branch}"
+          {
+            printf 'Operator-selected recovery from GitOps commit `%s`.\n\n' "${TARGET_SHA}"
+            printf 'Reason: %s\n\nEvidence: %s\n\n' "${RECOVERY_REASON}" "${RECOVERY_EVIDENCE}"
+            printf '%s\n' 'Review the diff and merge only after required CI. Follow docs/RECOVERY.md: verify Ready/smoke, reconcile champion for model recovery, then remove the recovery lock in a separate PR. No live deployment or automatic best-version selection was performed.'
+          } > "${RUNNER_TEMP}/recovery-body.md"
+          gh pr create --base main --head "${branch}" \
+            --title "recovery(${COMPONENT}): operator-selected known-good release" \
+            --body-file "${RUNNER_TEMP}/recovery-body.md"

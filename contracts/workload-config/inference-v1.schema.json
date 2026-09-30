@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chiendz11/iris-inference-service/contracts/runtime-config-v1.schema.json",
+  "title": "Iris inference non-secret runtime configuration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "DRIFT_WINDOW_SIZE",
+    "DRIFT_MIN_SAMPLES",
+    "DRIFT_ZSCORE_THRESHOLD"
+  ],
+  "properties": {
+    "DRIFT_WINDOW_SIZE": {
+      "type": "integer",
+      "minimum": 20,
+      "maximum": 100000
+    },
+    "DRIFT_MIN_SAMPLES": {
+      "type": "integer",
+      "minimum": 5,
+      "maximum": 100000
+    },
+    "DRIFT_ZSCORE_THRESHOLD": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 20
+    }
+  }
+}

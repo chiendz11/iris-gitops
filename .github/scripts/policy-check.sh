@@ -41,25 +41,46 @@ if rg -n '^[[:space:]]*kind:[[:space:]]*Secret[[:space:]]*$' \
   error "Plain Kubernetes Secret manifests are forbidden; use ExternalSecret references instead."
 fi
 
+if rg -n 'CreateNamespace=true' applications; then
+  error "Namespaces must be owned by platform-namespaces, not implicitly by child Applications."
+fi
+
+if rg -n '^[[:space:]]*kind:[[:space:]]*Namespace[[:space:]]*$' \
+  applications environments/production; then
+  error "Shared Namespaces must have one owner under platform/namespaces."
+fi
+
+if rg -n '^[[:space:]]*name:[[:space:]]*argocd[[:space:]]*$' \
+  platform/namespaces; then
+  error "Namespace/argocd is Terraform Helm-release state and must not be owned by GitOps."
+fi
+
+namespace_count="$(rg -c '^kind: Namespace$' platform/namespaces/namespaces.yaml)"
+namespace_prune_guards="$(rg -c 'argocd.argoproj.io/sync-options: Prune=false' \
+  platform/namespaces/namespaces.yaml)"
+if [[ "${namespace_count}" -eq 0 || "${namespace_count}" -ne "${namespace_prune_guards}" ]]; then
+  error "Every shared Namespace must carry Argo CD Prune=false protection."
+fi
+
 if rg -n \
   '^[[:space:]]*(image|newTag):[[:space:]].*:(latest|production)([[:space:]]|$)' \
   applications platform environments/production; then
   error "A mutable workload image tag was found. Promote an immutable commit SHA or image digest."
 fi
 
-dispatcher_image="$(sed -n 's/^[[:space:]]*- {name: dispatcher-image, value: \([^}]*\)}$/\1/p' \
+release_automation_image="$(sed -n 's/^[[:space:]]*- {name: release-automation-image, value: \([^}]*\)}$/\1/p' \
   environments/production/data-pipeline/workflow-template.yaml)"
-if [[ "${dispatcher_image}" == DISPATCHER_IMAGE_NOT_PUBLISHED ]]; then
+if [[ "${release_automation_image}" == RELEASE_AUTOMATION_IMAGE_NOT_PUBLISHED ]]; then
   if [[ -n "${base_sha}" ]] && git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
-    base_dispatcher_image="$(git show "${base_sha}:environments/production/data-pipeline/workflow-template.yaml" 2>/dev/null | \
-      sed -n 's/^[[:space:]]*- {name: dispatcher-image, value: \([^}]*\)}$/\1/p' || true)"
-    if [[ -n "${base_dispatcher_image}" && "${base_dispatcher_image}" != DISPATCHER_IMAGE_NOT_PUBLISHED ]]; then
-      error "A published dispatcher image must not be reverted to the bootstrap sentinel."
+    base_release_automation_image="$(git show "${base_sha}:environments/production/data-pipeline/workflow-template.yaml" 2>/dev/null | \
+      sed -n 's/^[[:space:]]*- {name: release-automation-image, value: \([^}]*\)}$/\1/p' || true)"
+    if [[ -n "${base_release_automation_image}" && "${base_release_automation_image}" != RELEASE_AUTOMATION_IMAGE_NOT_PUBLISHED ]]; then
+      error "A published release-automation image must not be reverted to the bootstrap sentinel."
     fi
   fi
-  warning "The dispatcher bootstrap sentinel remains; merge the digest PR before dataset events."
-elif [[ ! "${dispatcher_image}" =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$ ]]; then
-  error "The model-release dispatcher must be pinned to an ECR sha256 digest."
+  warning "The release-automation bootstrap sentinel remains; merge its digest PR before dataset events."
+elif [[ ! "${release_automation_image}" =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$ ]]; then
+  error "The model-release automation image must be pinned to an ECR sha256 digest."
 fi
 
 while IFS= read -r application; do
@@ -91,6 +112,15 @@ if [[ -n "${base_sha}" && "${base_sha}" != 0000000000000000000000000000000000000
     "${base_sha}:applications/platform-aws-load-balancer-controller.yaml" \
     2>/dev/null; then
     initial_platform_adoption=true
+  fi
+  platform_contract_initialized=false
+  if git cat-file -e "${base_sha}:state/production-platform.json" 2>/dev/null; then
+    platform_contract_initialized=true
+  fi
+  base_sensor_uses_training_tag_placeholder=false
+  if git show "${base_sha}:environments/production/data-pipeline/sensor.yaml" 2>/dev/null | \
+     grep -Fq 'dataTemplate: "REPLACE_ECR_TRAINING_REPOSITORY:'; then
+    base_sensor_uses_training_tag_placeholder=true
   fi
 
   current_file=""
@@ -124,6 +154,26 @@ if [[ -n "${base_sha}" && "${base_sha}" != 0000000000000000000000000000000000000
               allowed_initial_placeholder=true
               ;;
           esac
+        fi
+
+        if [[ "${platform_contract_initialized}" == false && \
+              "${current_file}:${placeholder}" == \
+              environments/production/data-pipeline/external-secret.yaml:REPLACE_MODEL_RELEASE_PUBLISHER_GITHUB_APP_SECRET_ARN ]]; then
+          allowed_initial_placeholder=true
+        fi
+
+        # During bootstrap only, allow the existing Sensor template to move
+        # from a commit tag to an immutable digest before ECR outputs exist.
+        # Inspect the base revision: deleting the contract in this PR cannot
+        # reopen bootstrap, nor can a resolved repository become a placeholder.
+        # Do not let this exception carry a second placeholder on the same line.
+        if [[ "${platform_contract_initialized}" == false && \
+              "${base_sensor_uses_training_tag_placeholder}" == true && \
+              "${current_file}:${placeholder}" == \
+              environments/production/data-pipeline/sensor.yaml:REPLACE_ECR_TRAINING_REPOSITORY && \
+              "${diff_line}" == *'dataTemplate: "REPLACE_ECR_TRAINING_REPOSITORY@sha256:'* && \
+              "${diff_line#*REPLACE_ECR_TRAINING_REPOSITORY}" != *REPLACE_* ]]; then
+          allowed_initial_placeholder=true
         fi
 
         if [[ "${allowed_initial_placeholder}" == true ]]; then

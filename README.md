@@ -1,144 +1,231 @@
-# Iris production GitOps
+# Iris production GitOps (repo 4/5)
 
-Repo này là **nguồn sự thật duy nhất** cho desired state của production EKS. Các repo ứng dụng chỉ
-test/build/push image và phát release intent hoặc mở pull request; chúng không giữ manifest
-production, Kubernetes credential hay chạy `kubectl apply` vào production.
+Profile hiện tại là solo: không required CODEOWNER/PR approval, nhưng PR và CI vẫn bắt buộc.
+Infrastructure/app publish jobs dùng Environment `prod` với owner self-approval. Các GitOps receiver
+chỉ tạo PR, không thêm Environment gate: bạn xem diff rồi merge để Argo CD triển khai.
+Receiver chỉ mở PR; operator xem diff rồi merge, không có auto-merge. Xem runbook liên repo tại
+`../iris-infrastructure/docs/SOLO_OPERATION.md` và `../iris-infrastructure/docs/ROLLBACK_RUNBOOK.md`.
+Rollback canary SLO thất bại có nhánh mở PR; smoke lỗi/timeout/thiếu metric chặn promote
+và phát diagnostics/alert, không tự suy đoán model lỗi. `recovery.yml` cho owner chọn
+historical GitOps commit để mở PR phục hồi model hoặc image/config. Đọc
+[docs/RECOVERY.md](docs/RECOVERY.md) về preflight, recovery lock, xác minh serving và champion.
 
-## Luồng triển khai
+Repo này là source of truth cho **desired state Kubernetes của duy nhất môi trường
+`production`**. Application và infrastructure repo chỉ phát contract trung lập; chúng không biết
+đường dẫn manifest, không mở GitOps PR và không có kubeconfig production. GitOps receiver validate
+contract, render đúng layout của repo này rồi mở pull request được bảo vệ. Chỉ sau khi PR được review
+và merge, Argo CD mới reconcile EKS.
 
-```text
-application repo -> test/build -> ECR immutable SHA -> PR vào iris-gitops
-                                                       |
-                                                       v
-                                                review + merge
-                                                       |
-                                                       v
-                                              Argo CD reconcile EKS
-```
-
-## Cấu trúc và ownership
-
-- `applications/`: AppProject và các child Application theo mô hình App of Apps; không chứa
-  Application quản lý chính Argo CD.
-- `automation/model-release-dispatcher/`: source, Dockerfile và test của release-intent adapter do
-  DevOps sở hữu; component này tách khỏi training image.
-- `platform/external-secrets-config/`: `ClusterSecretStore` dùng chung; không thuộc workload MLflow.
-- `platform/argocd-monitoring/`: ServiceMonitor cho controller, server, repo-server và ApplicationSet.
-- `environments/production/`: desired state của MLflow, training lifecycle và inference.
-
-Các platform chart bên thứ ba được pin version trong Application; riêng Argo CD chart và root
-Application thuộc Terraform ở `iris-infrastructure`. Workload tự viết dùng Kustomize; sync waves
-bảo đảm CRD/controller có trước custom resource.
-
-## Boundary với infrastructure
+## Ownership
 
 ```text
-Terraform owns                         Argo CD owns
--------------------------------        --------------------------------
-AWS foundation                        AppProject + child Applications
-EKS                                   platform controllers
-helm_release.argocd                   monitoring configuration
-root Application                      MLflow/training/inference workloads
+iris-gitops
+├── applications/                    AppProject và App-of-Apps children
+├── platform/                        namespaces, Knative, KServe, monitoring, External Secrets
+├── environments/production/         MLflow, training DAG và InferenceService
+├── contracts/
+│   ├── workload-release-v1.schema.json
+│   ├── model-result-v1.schema.json
+│   ├── model-release-v1.schema.json
+│   ├── platform-contract-v1.schema.json
+│   └── workload-config/              schema runtime được GitOps phê duyệt
+├── automation/
+│   ├── workload_release/             image/config/secret-ref renderer
+│   ├── model_release/                dispatch, render, smoke, SLO, promote
+│   ├── recovery/                     operator-selected recovery PR + stale-base guard
+│   └── platform_reconcile/           Terraform-output contract renderer
+├── state/                            projection ổn định do platform renderer tạo
+└── .github/workflows/
+    ├── validate.yml
+    ├── workload-release.yml
+    ├── model-release.yml
+    ├── recovery.yml
+    ├── platform-reconcile.yml
+    └── release-automation-image.yml
 ```
 
-Không có `applications/platform-argocd.yaml`, Argo CD không self-manage và repo này không chứa
-bootstrap script. Upgrade Argo CD phải là infrastructure PR; upgrade KServe, monitoring hoặc
-workload phải là GitOps PR.
+Không có `staging` hoặc cấu trúc base/overlay giả. Khi có nhu cầu staging thật mới thêm environment,
+policy, credential boundary và promotion rule tương ứng.
 
-## Argo CD production profile
+Training dùng PVC riêng cho mỗi Workflow với StorageClass `iris-training-gp3` do Application
+`platform-storage` quản lý. Driver EBS CSI/IAM thuộc Terraform infrastructure; PV/EBS được cấp
+động, không có manifest PV tĩnh. Xem [TRAINING_STORAGE.md](docs/TRAINING_STORAGE.md) về AZ,
+encryption, cleanup workspace và kiểm tra PVC Pending.
 
-Production values nằm ở `iris-infrastructure/terraform/platform/argocd-values-production.yaml`.
-Repo này chỉ giữ ServiceMonitor cho các metrics service mà Terraform-owned chart tạo ra.
+## Ba lifecycle độc lập
 
-Khi chưa cấp một IdP thực, operator dùng `argocd login --core` dựa trên EKS RBAC. Không dựng SSO
-giả bằng client ID placeholder. SSO values nằm ở infrastructure; ExternalSecret opt-in nằm trong
-`platform/external-secrets-config/examples/`:
+### 1. Workload release
 
-1. Tạo GitHub OAuth App/IdP client và secret JSON trong AWS Secrets Manager.
-2. Thêm secret ARN vào Terraform variable `additional_external_secret_arns`.
-3. Enable `argocd-sso.example.yaml` để merge client ID/secret vào `argocd-secret`.
-4. Merge `argocd-values-sso.example.yaml` vào Terraform-owned values, thay URL/domain và
-   organization thực.
+`workload-release.yml` nhận một `workload-release-v1` intent. Một workflow xử lý cả ba trường hợp:
 
-Repo hiện public nên Argo CD không cần repository credential. Nếu chuyển private, dùng
-`argocd-repository-credentials.example.yaml`: token nằm ở Secrets Manager, External
-Secrets tạo Kubernetes Secret loại `repo-creds`; không commit token và không đưa token runtime qua
-GitHub Actions.
-
-## GitHub governance
-
-`main` phải có branch protection: required check `validate`, một approval, CODEOWNER review, stale
-review dismissal, last-push approval, linear history, resolved conversation, không force-push/xóa.
-Repo infrastructure chứa script idempotent để áp cấu hình này. Với repo công ty, CODEOWNERS và
-người tạo PR phải là các chủ thể độc lập; `@chiendz11` chỉ là owner phù hợp cho capstone cá nhân.
-
-Workflow `.github/workflows/validate.yml` chạy với pull request, merge queue, push vào `main` và khi
-operator chủ động yêu cầu kiểm tra lại. Nó có hai nhánh kiểm tra song song:
-
-- `render-schema`: tự tìm mọi Kustomize root, render cả remote base đã pin và dùng `kubeconform`
-  kiểm tra các Kubernetes resource có schema chuẩn. CRD bên thứ ba chưa có schema upstream được
-  bỏ qua ở bước schema nhưng vẫn phải render thành công.
-- `policy`: giữ boundary Terraform/Argo CD, cấm lệnh mutate cluster trong Actions, cấm plain
-  Kubernetes Secret, mutable image tag, Helm chart version trôi nổi và placeholder mới.
-- `validate`: check tổng hợp ổn định duy nhất dùng cho branch protection.
-
-Workflow validation chỉ có quyền `contents: read`, không có AWS role, kubeconfig hoặc Kubernetes
-secret. Workflow `model-release.yml` riêng nhận release intent, dùng GitHub OIDC để assume đúng role
-chỉ đọc model-promoter secret, rồi mở protected PR; nó không truy cập EKS. Sau reviewer merge,
-Argo CD đang chạy trong EKS tự phát hiện commit `main` và reconcile. `workflow_dispatch` của
-validation chỉ chạy lại kiểm tra, không deploy hoặc sync Argo CD bằng tay.
-
-Nếu bật GitHub merge queue, trigger `merge_group` đã có sẵn; vẫn giữ `validate` làm required
-check. Dependabot gom cập nhật GitHub Actions hằng tuần; action dùng trong workflow được pin bằng
-commit SHA để tránh dependency tag bị thay đổi ngoài ý muốn.
-
-## Day-2 change lifecycle
-
-Mọi thay đổi platform, cấu hình hoặc image production đều theo cùng một flow:
-
-```text
-feature/application pipeline
-          |
-          v
-PR thay desired state trong iris-gitops
-          |
-          v
-render-schema + policy -> validate -> CODEOWNER review
-          |
-          v
-merge main -> Argo CD auto-sync/self-heal -> EKS
-```
-
-Repo ứng dụng build/scan một lần, push image immutable rồi mở PR chỉ thay image reference tương ứng.
-Không commit `latest`, không dùng GitHub Actions của repo này để `kubectl apply`, và không vận hành
-song song Argo Image Updater nếu đã chọn source-repo-driven PR để tránh hai controller cùng sửa một
-field.
-
-Model rollout cũng theo boundary này. Argo chỉ gửi contract
-`{action, model_version, change_id}` bằng dispatcher image riêng; script hiểu cấu trúc manifest và
-workflow tạo branch/PR đều nằm trong repo này. Dispatcher CI push image vào ECR bằng role riêng,
-lấy digest rồi mở protected PR pin digest đó vào WorkflowTemplate. Branch rules giữ CI cùng
-CODEOWNER review. Sau reviewer merge, Argo CD reconcile còn lifecycle chỉ dùng RBAC read-only để
-đợi KServe Ready trước khi chạy gate kế tiếp.
-
-Ownership của DAG được tách theo component:
-
-| Task | Image owner | Credential |
+| Thay đổi | Nội dung intent | GitOps PR |
 |---|---|---|
-| Fetch/train, smoke/evaluate | Dev/ML: `iris-data-pipeline` | Không có GitHub App key |
-| Dispatch release | DevOps: `automation/model-release-dispatcher` | Model-promoter key, chỉ task này |
-| Wait rollout | DevOps: kubectl read-only | Kubernetes `get/list/watch` |
+| Chỉ image | image digest + schema compatibility metadata | chỉ đổi image |
+| Chỉ config | `runtime_config` + schema version/digest | chỉ đổi ConfigMap/env |
+| Image cần config mới | cả `image` và `runtime_config` | một PR atomic chứa cả hai |
 
-## Metadata GitHub liên repo
+Inference và MLflow repo giữ JSON Schema cùng bộ giá trị production đã review. GitOps giữ một bản
+schema được phê duyệt. Receiver chỉ chấp nhận config khi version tồn tại, SHA-256 của hai bản schema
+trùng nhau, `required_config` khớp chính xác, đủ key, đúng kiểu/range và không có key mang tên giống
+secret. Với image-only, cùng metadata đó được dùng để validate config hiện có trong desired state;
+do đó image mới cần thêm biến phải phát hành atomic cùng config thay vì lách qua image-only.
 
-- `iris-model-registry` và `iris-inference-service` nhận `GITOPS_REPOSITORY`,
-  `GITOPS_APP_CLIENT_ID` cùng Environment secret `GITOPS_APP_PRIVATE_KEY` để mở image-update PR.
-- `iris-data-pipeline` không nhận đường dẫn manifest hoặc GitOps PR credential. Training container
-  chỉ nhận runtime App từ External Secrets và phát contract `model_release` vào repo này.
-- Repo này nhận `AWS_REGION`, `MODEL_PROMOTION_AWS_ROLE_ARN` và
-  `MODEL_PROMOTION_SECRET_ARN` từ `terraform/github-config`; workflow dùng chúng để đọc đúng secret
-  bằng OIDC và mở model-rollout PR.
-- `DISPATCHER_ECR_REPOSITORY` và `DISPATCHER_PUBLISH_AWS_ROLE_ARN` cũng do
-  `terraform/github-config` quản lý; publisher role chỉ ghi được dispatcher repository.
+Image luôn được pin dạng `repository@sha256:...`. `state/production-platform.json`, do
+`platform-reconcile` tạo, giữ allow-list ECR URL từ Terraform. Producer không thể dùng workload
+intent để đổi sang repository ngoài platform đã cấp. Trước khi render, receiver còn chạy
+`cosign verify` với đúng GitHub OIDC certificate identity của workflow `main` sở hữu component;
+digest không ký hoặc ký từ workflow/repo khác bị từ chối.
 
-Không lưu PAT, AWS access key tĩnh hoặc Kubernetes credential trong GitHub Secrets.
+Schema runtime đã phát hành là bất biến. Khi app cần `v2`, Dev thêm schema mới và đổi
+`release/config-schema-version.txt`; DevOps review/copy schema đó thành
+`contracts/workload-config/<component>-v2.schema.json` trước khi release intent v2 được chấp nhận.
+Việc này là contract-review gate, không buộc app biết đường dẫn manifest production.
+
+Secret value không xuất hiện trong intent. Producer chỉ có thể gửi reference:
+
+```json
+{
+  "secret_refs": {
+    "UPSTREAM_API_TOKEN": {
+      "key": "iris/inference/upstream",
+      "property": "token"
+    }
+  }
+}
+```
+
+Renderer tạo `ExternalSecret`; External Secrets đọc AWS Secrets Manager và tạo Kubernetes Secret.
+IAM của External Secrets vẫn là gate cuối: ARN mới phải được thêm trước vào Terraform
+`additional_external_secret_arns`. Gửi `{ "secret_refs": {} }` xóa binding runtime đã quản lý.
+
+Inference workload release và model release dùng chung một concurrency group. Receiver còn chặn
+image/config PR nếu model PR đang mở hoặc desired state đang có canary annotation; chiều ngược lại,
+model rollout bị chặn khi inference workload PR đang mở. Lock này giữ image/config ổn định trong
+toàn bộ khoảng đo canary, không chỉ trong thời gian một GitHub Actions run.
+
+Nếu image mới không tương thích khi pod cũ và mới cùng tồn tại, dùng ba PR tuần tự: thêm config
+backward-compatible, deploy image mới, rồi xóa config cũ. Đây là ba phase deployment, không phải ba
+workflow khác nhau.
+
+### 2. Model release
+
+Training image chỉ tạo `model-result-v1`. Release-automation image do repo này build chứa smoke,
+candidate evaluator, MLflow promoter và dispatcher. DAG production hoạt động như sau:
+
+```text
+S3 dataset event
+  -> exact training image digest
+  -> train + register immutable MLflow candidate
+  -> offline quality gate
+  -> model-release intent: canary
+  -> protected GitOps PR: canaryTrafficPercent=10
+  -> Argo CD + KServe Ready
+  -> smoke traffic tới /v1/models/iris:predict
+  -> Prometheus query chỉ model_version của candidate
+  -> pass: protected PR rollout 100% -> KServe Ready -> set MLflow champion
+  -> fail: protected PR khôi phục đúng baseline version, bỏ canary
+```
+
+Dispatcher nhận **toàn bộ** `model-result.json` qua workflow volume; ba file scalar chỉ phục vụ Argo
+`when`. Credential GitHub App chỉ được inject vào dispatch task, không vào train task. `wait-rollout`
+chỉ có RBAC `get/list/watch`, kiểm tra model URI, traffic, observed generation và Ready thay vì patch
+cluster.
+
+Metric canary có label `service` và `model_version`, nên evaluator không trộn baseline 90% với
+candidate 10%. Endpoint nội bộ và public cùng dùng contract chuẩn `/v1/models/iris:predict`.
+Sau khi rollout 100% Ready, registry promoter chỉ đổi alias nếu champion hiện tại vẫn đúng baseline
+đã capture lúc train; retry sau khi alias đã trỏ candidate là idempotent. Vì vậy một thay đổi alias
+ngoài luồng không bị pipeline âm thầm ghi đè.
+
+### 3. Platform reconcile
+
+`iris-infrastructure` apply Terraform rồi build `platform-contract-v1` từ allow-list output không
+nhạy cảm. `platform-reconcile.yml` ánh xạ contract vào EKS cluster/VPC ID, IRSA, bucket, queue, RDS
+endpoint/secret ARN, ECR allow-list, Route53 hostname và ACM certificate. Infrastructure producer
+không biết bất kỳ path nào dưới `applications/`, `platform/` hoặc `environments/production/`.
+
+```text
+Terraform output -json
+  -> build + validate platform-contract-v1
+  -> terraform/github-config publishes trusted receiver variables
+  -> dedicated platform publisher dispatches platform-reconcile.yml
+  -> GitOps renderer
+  -> protected PR
+  -> Argo CD reconcile
+```
+
+Run-specific provenance không được ghi vào `state/production-platform.json`, vì một Terraform apply
+không đổi hạ tầng không nên tạo PR nhiễu. File state chỉ giữ constraint ổn định như cluster và ECR
+repository.
+Platform renderer cố ý không điền image workload: nó chỉ công bố ECR allow-list. Hai placeholder
+image ban đầu được thay atomically bởi workload-release PR đầu tiên kèm digest đã ký.
+
+## Boundary Terraform và Argo CD
+
+| Terraform (`iris-infrastructure`) | Argo CD (`iris-gitops`) |
+|---|---|
+| VPC, endpoint, EKS, node group | AppProject và child Applications |
+| RDS Multi-AZ, S3, SQS, ECR | Knative, KServe, monitoring |
+| IAM/OIDC/IRSA, Route53, ACM | ExternalSecret và workload manifests |
+| `helm_release.argocd` | MLflow, training lifecycle, inference |
+| Root Application bootstrap | Auto-sync/prune/self-heal children |
+
+Argo CD không self-manage. Repo này không chứa `platform-argocd.yaml`, Helm install hoặc bootstrap
+script cho Argo CD. Upgrade Argo CD là infrastructure PR; upgrade KServe/Knative/monitoring là
+GitOps PR. GitHub Actions không chạy `kubectl apply`, `helm upgrade` hoặc `argocd app sync`.
+
+`platform-namespaces` là owner duy nhất của các Namespace dùng chung (`mlops`, `argo`,
+`argo-events`, monitoring và controller namespaces). Child Applications không dùng
+`CreateNamespace=true` và workload roots không lặp `Namespace/mlops`, tránh SharedResourceWarning
+hoặc prune nhầm toàn bộ workload của Application khác. Mỗi namespace dùng chung có
+`argocd.argoproj.io/sync-options: Prune=false`; namespace `argocd` không nằm ở đây vì thuộc
+Terraform `helm_release.argocd`.
+
+## CI, credentials và review gate
+
+`validate.yml` chạy unit tests cho ba renderer, build thử release-automation image, render mọi
+Kustomize root, kubeconform schema check và enforce ownership policy. Required check ổn định là
+`validate`; ruleset solo yêu cầu PR/CI, linear history, resolved conversation và cấm
+force-push/delete.
+
+Inference, model-registry và in-cluster model lifecycle dùng ba GitHub App publisher riêng, mỗi App
+chỉ có `Actions: write`. Receiver so `github.actor` với component actor do Terraform quản lý, nên
+một producer bị compromise không thể tự khai `source_repository` để giả làm producer khác. Platform
+handoff dùng App thứ tư `iris-platform-contract-publisher` với cùng quyền tối thiểu và actor gate.
+Receiver
+dùng GitHub OIDC assume role branch-bound, đọc `iris-gitops-automation` App credential từ Secrets
+Manager và mint token chỉ có `Contents/Pull requests: write`. Không repo nào lưu PAT, AWS access key
+tĩnh hoặc kubeconfig trong GitHub Secrets.
+
+Các repository variable của repo này do `terraform/github-config` quản lý:
+
+- `AWS_REGION`;
+- `RELEASE_AUTOMATION_ECR_REPOSITORY`;
+- `RELEASE_AUTOMATION_PUBLISH_AWS_ROLE_ARN`;
+- `GITOPS_AUTOMATION_AWS_ROLE_ARN`;
+- `GITOPS_AUTOMATION_SECRET_ARN`;
+- `PLATFORM_RECONCILE_ALLOWED_ACTOR`;
+- `INFERENCE_RELEASE_ALLOWED_ACTOR`, `MODEL_REGISTRY_RELEASE_ALLOWED_ACTOR` và
+  `MODEL_RELEASE_ALLOWED_ACTOR`.
+
+Hai ARN dùng để authenticate receiver **không nằm trong platform contract**. Chúng chỉ đến từ
+trusted repository variables do `terraform/github-config` quản lý, nên dispatch payload không thể
+chọn role hoặc Secrets Manager secret mà workflow sẽ đọc. `source_repository` trong JSON vẫn là
+provenance claim; trust thực tế đến từ dedicated App actor, protected infra Environment và PR gate.
+
+## Thứ tự khởi tạo production
+
+1. Terraform platform tạo AWS/EKS, cài Argo CD + Root Application, tạo ECR/IAM/Secrets Manager.
+2. Lần platform run đầu dừng fail-closed trước GitOps dispatch nếu hai container chưa có version
+   `AWSCURRENT`; Terraform apply trước đó vẫn thành công và không bị rollback.
+3. Seed hai GitHub App private key theo runbook hạ tầng; Terraform quản lý container/ARN, không quản
+   lý secret value. Dispatch `production-infra.yml` với `scope=handoff` để phát lại contract từ state hiện hành.
+4. Orchestrator hạ tầng gọi `github-config-after` bằng reusable workflow để publish trusted receiver
+   variables, sau đó gọi `handoff`. Các job dùng Environment `prod` có owner self-approval; dedicated
+   publisher App chỉ dispatch contract sau khi config và preflight đã đạt.
+5. Review/merge PR `platform-reconcile` để xóa placeholder hạ tầng và tạo ECR allow-list state.
+6. Chạy lại `release-automation-image.yml`, review/merge PR pin automation digest.
+7. Merge workload release PR cho MLflow và inference images/config.
+8. Merge data-pipeline code/dataset; S3 notification mới bắt đầu model lifecycle.
+
+Không phát dataset event khi `RELEASE_AUTOMATION_IMAGE_NOT_PUBLISHED` còn trong WorkflowTemplate.

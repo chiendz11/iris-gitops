@@ -15,10 +15,15 @@ spec:
       valuesObject:
         controller:
           workflowNamespaces: [argo]
+          metricsConfig:
+            enabled: true
+          serviceMonitor:
+            enabled: true
+            additionalLabels: {release: monitoring}
         server:
           authModes: [server]
   destination: {server: "https://kubernetes.default.svc", namespace: argo}
   syncPolicy:
     automated: {prune: true, selfHeal: true}
-    syncOptions: [CreateNamespace=true, ServerSideApply=true]
+    syncOptions: [ServerSideApply=true]
     retry: {limit: 10}

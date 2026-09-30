@@ -33,5 +33,5 @@ spec:
   destination: {server: "https://kubernetes.default.svc", namespace: external-dns}
   syncPolicy:
     automated: {prune: true, selfHeal: true}
-    syncOptions: [CreateNamespace=true, ServerSideApply=true]
+    syncOptions: [ServerSideApply=true]
     retry: {limit: 10}

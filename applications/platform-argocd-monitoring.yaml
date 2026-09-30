@@ -13,5 +13,5 @@ spec:
   destination: {server: "https://kubernetes.default.svc", namespace: argocd}
   syncPolicy:
     automated: {prune: true, selfHeal: true}
-    syncOptions: [CreateNamespace=true, ServerSideApply=true, SkipDryRunOnMissingResource=true]
+    syncOptions: [ServerSideApply=true, SkipDryRunOnMissingResource=true]
     retry: {limit: 10}

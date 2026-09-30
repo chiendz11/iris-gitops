@@ -1,17 +1,20 @@
 name: model-release
 
 on:
-  repository_dispatch:
-    types: [model_release]
+  workflow_dispatch:
+    inputs:
+      contract:
+        description: JSON model-release-v1 intent
+        required: true
+        type: string
 
-# Only a reviewed workflow on the default branch can exchange GitHub OIDC for
-# the narrowly-scoped secret-reader role. Kubernetes never receives AWS admin.
 permissions:
   contents: read
   id-token: write
 
 concurrency:
-  group: model-release-production
+  # Shared with workload-release so their open-PR ownership checks cannot race.
+  group: inference-desired-state-production
   cancel-in-progress: false
 
 jobs:
@@ -19,108 +22,135 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      ACTION: ${{ github.event.client_payload.action }}
-      MODEL_VERSION: ${{ github.event.client_payload.model_version }}
-      CHANGE_ID: ${{ github.event.client_payload.change_id }}
       AWS_REGION: ${{ vars.AWS_REGION }}
-      MODEL_PROMOTION_AWS_ROLE_ARN: ${{ vars.MODEL_PROMOTION_AWS_ROLE_ARN }}
-      MODEL_PROMOTION_SECRET_ARN: ${{ vars.MODEL_PROMOTION_SECRET_ARN }}
-      INFERENCE_MANIFEST: environments/production/inference-service/inferenceservice.yaml
+      AUTOMATION_ROLE_ARN: ${{ vars.GITOPS_AUTOMATION_AWS_ROLE_ARN }}
+      AUTOMATION_SECRET_ARN: ${{ vars.GITOPS_AUTOMATION_SECRET_ARN }}
+      MODEL_RELEASE_ALLOWED_ACTOR: ${{ vars.MODEL_RELEASE_ALLOWED_ACTOR }}
     steps:
-      - name: Validate release-intent contract
-        run: |
-          set -euo pipefail
-          [[ "${ACTION}" =~ ^(bootstrap|canary|promote|rollback)$ ]]
-          [[ "${MODEL_VERSION}" =~ ^[0-9]+$ ]]
-          [[ "${CHANGE_ID}" =~ ^[A-Za-z0-9._-]+$ ]]
-          test -n "${AWS_REGION}"
-          test -n "${MODEL_PROMOTION_AWS_ROLE_ARN}"
-          test -n "${MODEL_PROMOTION_SECRET_ARN}"
-
-      - name: Assume model-promotion secret-reader role
-        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
-        with:
-          role-to-assume: ${{ env.MODEL_PROMOTION_AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Read model-promoter App credential
-        id: app-credential
+      - name: Authorize model release publisher identity
         env:
-          SECRET_ARN: ${{ env.MODEL_PROMOTION_SECRET_ARN }}
+          DISPATCH_ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
-          secret_json="$(aws secretsmanager get-secret-value \
-            --secret-id "${SECRET_ARN}" --query SecretString --output text)"
-          client_id="$(jq -er '.client_id' <<<"${secret_json}")"
-          private_key="$(jq -er '.private_key' <<<"${secret_json}")"
-          echo "::add-mask::${client_id}"
-          while IFS= read -r line; do echo "::add-mask::${line}"; done <<<"${private_key}"
-          delimiter="APP_KEY_${RANDOM}_${RANDOM}"
-          {
-            echo "client_id=${client_id}"
-            echo "private_key<<${delimiter}"
-            printf '%s\n' "${private_key}"
-            echo "${delimiter}"
-          } >> "${GITHUB_OUTPUT}"
+          [[ "${MODEL_RELEASE_ALLOWED_ACTOR}" == *'[bot]' ]] || {
+            echo "MODEL_RELEASE_ALLOWED_ACTOR is not configured." >&2
+            exit 1
+          }
+          [[ "${DISPATCH_ACTOR}" == "${MODEL_RELEASE_ALLOWED_ACTOR}" ]] || {
+            echo "Unauthorized model release publisher actor: ${DISPATCH_ACTOR}" >&2
+            exit 1
+          }
 
-      - name: Mint short-lived GitOps mutation token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ steps.app-credential.outputs.client_id }}
-          private-key: ${{ steps.app-credential.outputs.private_key }}
-          owner: ${{ github.repository_owner }}
-          repositories: iris-gitops
-          permission-contents: write
-          permission-pull-requests: write
+      - name: Validate receiver configuration
+        run: |
+          set -euo pipefail
+          test -n "${AWS_REGION}"
+          test -n "${AUTOMATION_ROLE_ARN}"
+          test -n "${AUTOMATION_SECRET_ARN}"
 
-      - name: Checkout GitOps desired state
+      - name: Checkout authoritative desired state
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          token: ${{ steps.app-token.outputs.token }}
           persist-credentials: false
           fetch-depth: 0
 
-      - name: Install pinned renderer dependencies
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
-      - run: pip install PyYAML==6.0.3
+      - name: Install pinned renderer dependencies
+        run: pip install jsonschema==4.25.1 PyYAML==6.0.3
 
-      - name: Create or resume protected rollout pull request
+      - name: Validate model release intent
+        id: intent
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          CONTRACT_JSON: ${{ inputs.contract }}
         run: |
           set -euo pipefail
-          safe_change_id="${CHANGE_ID//./-}"
-          branch="model/iris-v${MODEL_VERSION}-${ACTION}-${safe_change_id:0:24}"
+          contract_file="${RUNNER_TEMP}/model-release.json"
+          printf '%s' "${CONTRACT_JSON}" > "${contract_file}"
+          metadata="$(python -m automation.model_release.renderer \
+            --contract "${contract_file}" --validate-only)"
+          {
+            echo "contract_file=${contract_file}"
+            echo "action=$(jq -r '.action' <<<"${metadata}")"
+            echo "change_id=$(jq -r '.change_id' <<<"${metadata}")"
+            echo "model_version=$(jq -r '.model_version' <<<"${metadata}")"
+            echo "baseline_model_version=$(jq -r '.baseline_model_version' <<<"${metadata}")"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Mint GitOps-owned pull-request token
+        id: gitops-token
+        uses: ./.github/actions/gitops-automation-token
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-arn: ${{ env.AUTOMATION_ROLE_ARN }}
+          secret-arn: ${{ env.AUTOMATION_SECRET_ARN }}
+          owner: ${{ github.repository_owner }}
+          repository: iris-gitops
+
+      - name: Block model rollout while an inference workload PR is open
+        env:
+          GH_TOKEN: ${{ steps.gitops-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          open_workload_releases="$(gh pr list \
+            --state open --limit 1000 \
+            --json headRefName,url \
+            --jq '[.[] | select((.headRefName | startswith("release/workload-inference-")) or (.headRefName | startswith("recovery/")))]')"
+          if [[ "$(jq length <<<"${open_workload_releases}")" -ne 0 ]]; then
+            echo "Model release is blocked while an inference workload PR is open:" >&2
+            jq -r '.[].url' <<<"${open_workload_releases}" >&2
+            exit 1
+          fi
+
+      - name: Render desired state on an isolated branch
+        id: render
+        env:
+          GH_TOKEN: ${{ steps.gitops-token.outputs.token }}
+          ACTION: ${{ steps.intent.outputs.action }}
+          CHANGE_ID: ${{ steps.intent.outputs.change_id }}
+          MODEL_VERSION: ${{ steps.intent.outputs.model_version }}
+          CONTRACT_FILE: ${{ steps.intent.outputs.contract_file }}
+        run: |
+          set -euo pipefail
+          branch="release/model-v${MODEL_VERSION}-${ACTION}-${CHANGE_ID}"
           existing_url="$(gh pr list --state open --head "${branch}" --json url --jq '.[0].url // ""')"
-
           if [[ -n "${existing_url}" ]]; then
-            echo "Resuming ${existing_url}"
+            echo "Existing release PR: ${existing_url}"
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
-
           git checkout -B "${branch}" origin/main
-          python .github/scripts/model_rollout.py \
-            --manifest "${INFERENCE_MANIFEST}" \
-            --model-version "${MODEL_VERSION}" \
-            --action "${ACTION}"
-
-          if git diff --quiet -- "${INFERENCE_MANIFEST}"; then
-            echo "Production desired state already matches this release intent."
+          python -m automation.model_release.renderer \
+            --contract "${CONTRACT_FILE}" --root .
+          if git diff --quiet; then
+            echo "Production desired state already matches this model release."
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
+          {
+            echo "changed=true"
+            echo "branch=${branch}"
+          } >> "${GITHUB_OUTPUT}"
 
-          git config user.name "iris-model-promoter[bot]"
-          git config user.email "iris-model-promoter[bot]@users.noreply.github.com"
-          git add -- "${INFERENCE_MANIFEST}"
+      - name: Open protected model release pull request
+        if: steps.render.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.gitops-token.outputs.token }}
+          BRANCH: ${{ steps.render.outputs.branch }}
+          ACTION: ${{ steps.intent.outputs.action }}
+          MODEL_VERSION: ${{ steps.intent.outputs.model_version }}
+          BASELINE_MODEL_VERSION: ${{ steps.intent.outputs.baseline_model_version }}
+        run: |
+          set -euo pipefail
+          git config user.name "iris-gitops-automation[bot]"
+          git config user.email "iris-gitops-automation[bot]@users.noreply.github.com"
+          git add -- environments/production/inference-service/inferenceservice.yaml
           git commit -m "deploy(model): ${ACTION} Iris v${MODEL_VERSION}"
           gh auth setup-git
-          git push --force-with-lease origin "${branch}"
-          pr_url="$(gh pr create \
+          git push --force-with-lease origin "${BRANCH}"
+          gh pr create \
             --base main \
-            --head "${branch}" \
+            --head "${BRANCH}" \
             --title "deploy(model): ${ACTION} Iris v${MODEL_VERSION}" \
-            --body "Argo lifecycle \`${CHANGE_ID}\` requested \`${ACTION}\` for immutable MLflow model version \`${MODEL_VERSION}\`. The GitOps validate check and CODEOWNER approval remain mandatory.")"
-          echo "Created ${pr_url}"
+            --body "Renders a validated model-release-v1 intent for candidate v${MODEL_VERSION} with captured baseline v${BASELINE_MODEL_VERSION}. Solo policy: required CI and an operator-merged PR remain mandatory; Argo CD deploys only after merge."

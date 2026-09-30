@@ -1,0 +1,4 @@
+jsonschema==4.25.1
+mlflow==3.5.1
+PyJWT[crypto]==2.10.1
+requests==2.32.5

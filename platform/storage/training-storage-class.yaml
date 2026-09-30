@@ -1,0 +1,15 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: iris-training-gp3
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+  encrypted: "true"
+  csi.storage.k8s.io/fstype: ext4
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+# Disposable training workspace only. Durable data/models live in S3/MLflow.
+reclaimPolicy: Delete
