@@ -8,18 +8,36 @@ metadata:
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
-metadata: {name: iris-kserve-rollout, namespace: mlops}
+metadata: {name: iris-workflow-task-results, namespace: argo}
 rules:
-  - apiGroups: [serving.kserve.io]
-    resources: [inferenceservices]
-    verbs: [get, patch]
+  - apiGroups: [argoproj.io]
+    resources: [workflowtaskresults]
+    verbs: [create, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
-metadata: {name: iris-training-kserve-rollout, namespace: mlops}
+metadata: {name: iris-training-task-results, namespace: argo}
 subjects:
   - {kind: ServiceAccount, name: iris-training, namespace: argo}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: iris-kserve-rollout
+  name: iris-workflow-task-results
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: iris-kserve-rollout-observer, namespace: mlops}
+rules:
+  - apiGroups: [serving.kserve.io]
+    resources: [inferenceservices]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: iris-training-kserve-rollout-observer, namespace: mlops}
+subjects:
+  - {kind: ServiceAccount, name: iris-training, namespace: argo}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: iris-kserve-rollout-observer

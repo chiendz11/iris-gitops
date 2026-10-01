@@ -13,3 +13,23 @@ patches:
       - op: add
         path: /data/ingress-class
         value: kourier.ingress.networking.knative.dev
+  - target:
+      version: v1
+      kind: Service
+      name: kourier
+      namespace: kourier-system
+    patch: |-
+      - op: add
+        path: /metadata/annotations
+        value:
+          service.beta.kubernetes.io/aws-load-balancer-type: external
+          service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+          service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+          service.beta.kubernetes.io/aws-load-balancer-ssl-cert: REPLACE_PUBLIC_ACM_CERTIFICATE_ARN
+          service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "443"
+          service.beta.kubernetes.io/aws-load-balancer-backend-protocol: tcp
+          service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: TCP
+          external-dns.alpha.kubernetes.io/hostname: REPLACE_KSERVE_HOSTNAME
+      - op: replace
+        path: /spec/ports/1/targetPort
+        value: 8080

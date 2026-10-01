@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chiendz11/iris-gitops/contracts/workload-release-v1.schema.json",
+  "title": "Iris production workload release v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "kind",
+    "component",
+    "environment",
+    "source_repository",
+    "source_sha",
+    "change_id"
+  ],
+  "anyOf": [
+    {"required": ["image"]},
+    {"required": ["runtime_config"]},
+    {"required": ["secret_refs"]}
+  ],
+  "dependentRequired": {
+    "runtime_config": ["config_schema_version", "config_schema_digest", "required_config"],
+    "required_config": ["config_schema_version", "config_schema_digest"]
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "component": {"enum": ["inference", "model-registry"]}
+        },
+        "required": ["component", "image"]
+      },
+      "then": {
+        "required": [
+          "config_schema_version",
+          "config_schema_digest",
+          "required_config"
+        ]
+      }
+    }
+  ],
+  "properties": {
+    "contract_version": {"const": "v1"},
+    "kind": {"const": "workload_release"},
+    "component": {
+      "enum": ["inference", "model-registry", "release-automation"]
+    },
+    "environment": {"const": "production"},
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "digest"],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "pattern": "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[A-Za-z0-9._/-]+$"
+        },
+        "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "runtime_config": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": ["string", "number", "integer", "boolean"]
+      }
+    },
+    "config_schema_version": {
+      "type": "string",
+      "pattern": "^v[1-9][0-9]*$"
+    },
+    "config_schema_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "required_config": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"}
+    },
+    "secret_refs": {
+      "type": "object",
+      "propertyNames": {"pattern": "^[A-Z][A-Z0-9_]*$"},
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "property"],
+        "properties": {
+          "key": {"type": "string", "minLength": 1, "maxLength": 512},
+          "property": {"type": "string", "pattern": "^[A-Za-z0-9._/-]+$"}
+        }
+      }
+    },
+    "source_repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "source_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "change_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]{1,80}$"
+    }
+  }
+}

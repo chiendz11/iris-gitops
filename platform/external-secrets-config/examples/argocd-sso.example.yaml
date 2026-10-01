@@ -1,0 +1,18 @@
+# Enable only after provisioning the real IdP client and allowing this secret
+# ARN in Terraform additional_external_secret_arns.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: argocd-sso
+  namespace: argocd
+spec:
+  refreshInterval: 1h
+  secretStoreRef: {kind: ClusterSecretStore, name: aws-secrets-manager}
+  target:
+    name: argocd-secret
+    creationPolicy: Merge
+  data:
+    - secretKey: dex.github.clientId
+      remoteRef: {key: REPLACE_ARGOCD_SSO_SECRET_ARN, property: client_id}
+    - secretKey: dex.github.clientSecret
+      remoteRef: {key: REPLACE_ARGOCD_SSO_SECRET_ARN, property: client_secret}

@@ -1,0 +1,132 @@
+name: platform-reconcile
+
+on:
+  workflow_dispatch:
+    inputs:
+      contract:
+        description: JSON platform-contract-v1 payload
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: platform-reconcile-production
+  cancel-in-progress: false
+
+jobs:
+  propose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AUTOMATION_ROLE_ARN: ${{ vars.GITOPS_AUTOMATION_AWS_ROLE_ARN }}
+      AUTOMATION_SECRET_ARN: ${{ vars.GITOPS_AUTOMATION_SECRET_ARN }}
+      ALLOWED_PUBLISHER_ACTOR: ${{ vars.PLATFORM_RECONCILE_ALLOWED_ACTOR }}
+    steps:
+      - name: Authorize the platform contract publisher
+        env:
+          DISPATCH_ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          test -n "${AWS_REGION}" || { echo "AWS_REGION is not configured." >&2; exit 1; }
+          test -n "${AUTOMATION_ROLE_ARN}" || { echo "GITOPS_AUTOMATION_AWS_ROLE_ARN is not configured." >&2; exit 1; }
+          test -n "${AUTOMATION_SECRET_ARN}" || { echo "GITOPS_AUTOMATION_SECRET_ARN is not configured." >&2; exit 1; }
+          test -n "${ALLOWED_PUBLISHER_ACTOR}" || { echo "PLATFORM_RECONCILE_ALLOWED_ACTOR is not configured." >&2; exit 1; }
+          [[ "${ALLOWED_PUBLISHER_ACTOR}" == *'[bot]' ]] || {
+            echo "PLATFORM_RECONCILE_ALLOWED_ACTOR must identify a GitHub App bot." >&2
+            exit 1
+          }
+          [[ "${DISPATCH_ACTOR}" == "${ALLOWED_PUBLISHER_ACTOR}" ]] || {
+            echo "Unauthorized platform publisher actor: ${DISPATCH_ACTOR}" >&2
+            exit 1
+          }
+
+      - name: Checkout authoritative desired state
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Install pinned renderer dependencies
+        run: pip install jsonschema==4.25.1 PyYAML==6.0.3
+
+      - name: Validate platform contract
+        id: intent
+        env:
+          CONTRACT_JSON: ${{ inputs.contract }}
+        run: |
+          set -euo pipefail
+          contract_file="${RUNNER_TEMP}/platform-contract.json"
+          printf '%s' "${CONTRACT_JSON}" > "${contract_file}"
+          metadata="$(python -m automation.platform_reconcile.renderer \
+            --contract "${contract_file}" --validate-only)"
+          {
+            echo "contract_file=${contract_file}"
+            echo "branch_id=$(jq -r '.branch_id' <<<"${metadata}")"
+            echo "source_sha=$(jq -r '.source_sha' <<<"${metadata}")"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Mint GitOps-owned pull-request token
+        id: gitops-token
+        uses: ./.github/actions/gitops-automation-token
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-arn: ${{ env.AUTOMATION_ROLE_ARN }}
+          secret-arn: ${{ env.AUTOMATION_SECRET_ARN }}
+          owner: ${{ github.repository_owner }}
+          repository: iris-gitops
+
+      - name: Render desired state on an isolated branch
+        id: render
+        env:
+          GH_TOKEN: ${{ steps.gitops-token.outputs.token }}
+          BRANCH_ID: ${{ steps.intent.outputs.branch_id }}
+          CONTRACT_FILE: ${{ steps.intent.outputs.contract_file }}
+        run: |
+          set -euo pipefail
+          branch="reconcile/platform-${BRANCH_ID}"
+          existing_url="$(gh pr list --state open --head "${branch}" --json url --jq '.[0].url // ""')"
+          if [[ -n "${existing_url}" ]]; then
+            echo "Existing platform PR: ${existing_url}"
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          git checkout -B "${branch}" origin/main
+          python -m automation.platform_reconcile.renderer \
+            --contract "${CONTRACT_FILE}" --root .
+          if git diff --quiet; then
+            echo "Production desired state already matches the platform contract."
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          {
+            echo "changed=true"
+            echo "branch=${branch}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Open protected platform reconciliation pull request
+        if: steps.render.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.gitops-token.outputs.token }}
+          BRANCH: ${{ steps.render.outputs.branch }}
+          SOURCE_SHA: ${{ steps.intent.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          short_sha="${SOURCE_SHA:0:12}"
+          git config user.name "iris-gitops-automation[bot]"
+          git config user.email "iris-gitops-automation[bot]@users.noreply.github.com"
+          git add -- applications platform environments/production state
+          git commit -m "reconcile(platform): apply contract ${short_sha}"
+          gh auth setup-git
+          git push --force-with-lease origin "${BRANCH}"
+          gh pr create \
+            --base main \
+            --head "${BRANCH}" \
+            --title "reconcile(platform): apply contract ${short_sha}" \
+            --body "Renders a validated platform-contract-v1 payload. Solo policy: required CI and an operator-merged PR remain mandatory; Argo CD deploys only after merge."

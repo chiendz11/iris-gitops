@@ -21,6 +21,7 @@ spec:
         env:
           - {name: MLFLOW_TRACKING_URI, value: "http://mlflow.mlops.svc.cluster.local:5000"}
           - {name: MODEL_URI, value: "models:/iris-classifier@champion"}
+          - {name: MODEL_VERSION, value: champion}
           - {name: SERVICE_NAME, value: iris-classifier}
           - {name: DRIFT_WINDOW_SIZE, value: "200"}
           - {name: DRIFT_MIN_SAMPLES, value: "30"}

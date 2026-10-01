@@ -1,0 +1,30 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-aws-load-balancer-controller
+  namespace: argocd
+  annotations: {argocd.argoproj.io/sync-wave: "-37"}
+spec:
+  project: iris-production
+  source:
+    repoURL: https://aws.github.io/eks-charts
+    chart: aws-load-balancer-controller
+    targetRevision: 1.14.0
+    helm:
+      releaseName: aws-load-balancer-controller
+      valuesObject:
+        clusterName: REPLACE_EKS_CLUSTER_NAME
+        region: ap-southeast-1
+        vpcId: REPLACE_VPC_ID
+        replicaCount: 2
+        serviceAccount:
+          create: true
+          name: aws-load-balancer-controller
+          annotations:
+            eks.amazonaws.com/role-arn: REPLACE_AWS_LOAD_BALANCER_CONTROLLER_ROLE_ARN
+            eks.amazonaws.com/sts-regional-endpoints: "true"
+  destination: {server: "https://kubernetes.default.svc", namespace: kube-system}
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [ServerSideApply=true]
+    retry: {limit: 10}

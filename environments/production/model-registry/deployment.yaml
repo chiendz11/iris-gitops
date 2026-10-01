@@ -17,8 +17,20 @@ spec:
             - configMapRef: {name: mlflow-config}
             - secretRef: {name: mlflow-database}
           ports: [{name: http, containerPort: 5000}]
-          readinessProbe: {httpGet: {path: /health, port: http}, initialDelaySeconds: 10}
-          livenessProbe: {httpGet: {path: /health, port: http}, initialDelaySeconds: 30}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+              httpHeaders:
+                - {name: Host, value: mlflow.mlops.svc.cluster.local}
+            initialDelaySeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+              httpHeaders:
+                - {name: Host, value: mlflow.mlops.svc.cluster.local}
+            initialDelaySeconds: 30
           resources:
             requests: {cpu: 250m, memory: 512Mi}
             limits: {cpu: "1", memory: 1Gi}

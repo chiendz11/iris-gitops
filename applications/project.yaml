@@ -5,6 +5,7 @@ metadata:
   namespace: argocd
   annotations:
     argocd.argoproj.io/sync-wave: "-100"
+    argocd.argoproj.io/sync-options: Prune=false
 spec:
   description: Production Iris MLOps platform
   sourceRepos:
@@ -12,6 +13,8 @@ spec:
     - https://argoproj.github.io/argo-helm
     - https://charts.external-secrets.io
     - https://prometheus-community.github.io/helm-charts
+    - https://aws.github.io/eks-charts
+    - https://kubernetes-sigs.github.io/external-dns/
     - ghcr.io/kserve/charts
   destinations:
     - namespace: "*"
@@ -22,3 +25,5 @@ spec:
   namespaceResourceWhitelist:
     - group: "*"
       kind: "*"
+  orphanedResources:
+    warn: true

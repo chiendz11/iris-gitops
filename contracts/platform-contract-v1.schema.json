@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chiendz11/iris-gitops/contracts/platform-contract-v1.schema.json",
+  "title": "Iris production platform contract v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "producer",
+    "environment",
+    "source_repository",
+    "source_sha",
+    "change_id",
+    "aws_region",
+    "cluster",
+    "storage",
+    "events",
+    "registry",
+    "ecr_repositories",
+    "iam_roles",
+    "automation",
+    "domain"
+  ],
+  "properties": {
+    "contract_version": {"const": "v1"},
+    "producer": {"const": "iris-infrastructure"},
+    "environment": {"const": "production"},
+    "source_repository": {"const": "chiendz11/iris-infrastructure"},
+    "source_sha": {"type": "string", "pattern": "^[0-9a-f]{7,64}$"},
+    "change_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "aws_region": {
+      "type": "string",
+      "pattern": "^[a-z]{2}(?:-gov)?-[a-z]+-[0-9]+$"
+    },
+    "cluster": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "vpc_id"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "vpc_id": {"type": "string", "pattern": "^vpc-[0-9a-f]+$"}
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dvc_bucket", "mlflow_artifact_bucket", "argo_artifact_bucket"],
+      "properties": {
+        "dvc_bucket": {"$ref": "#/$defs/s3Bucket"},
+        "mlflow_artifact_bucket": {"$ref": "#/$defs/s3Bucket"},
+        "argo_artifact_bucket": {"$ref": "#/$defs/s3Bucket"}
+      }
+    },
+    "events": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dataset_queue_name", "dataset_queue_url", "dataset_queue_arn"],
+      "properties": {
+        "dataset_queue_name": {"type": "string", "minLength": 1},
+        "dataset_queue_url": {
+          "type": "string",
+          "pattern": "^https://sqs\\.[A-Za-z0-9.-]+/[0-9]{12}/[A-Za-z0-9_-]+$"
+        },
+        "dataset_queue_arn": {"$ref": "#/$defs/awsArn"}
+      }
+    },
+    "registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rds_endpoint", "rds_master_secret_arn"],
+      "properties": {
+        "rds_endpoint": {"type": "string", "minLength": 1},
+        "rds_master_secret_arn": {"$ref": "#/$defs/awsArn"}
+      }
+    },
+    "ecr_repositories": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["training", "inference", "mlflow", "dispatcher"],
+      "properties": {
+        "training": {"$ref": "#/$defs/ecrRepository"},
+        "inference": {"$ref": "#/$defs/ecrRepository"},
+        "mlflow": {"$ref": "#/$defs/ecrRepository"},
+        "dispatcher": {"$ref": "#/$defs/ecrRepository"}
+      }
+    },
+    "iam_roles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "service_accounts",
+        "aws_load_balancer_controller",
+        "external_dns"
+      ],
+      "properties": {
+        "service_accounts": {
+          "type": "object",
+          "minProperties": 4,
+          "additionalProperties": {"$ref": "#/$defs/awsArn"}
+        },
+        "aws_load_balancer_controller": {"$ref": "#/$defs/awsArn"},
+        "external_dns": {
+          "oneOf": [{"$ref": "#/$defs/awsArn"}, {"type": "null"}]
+        }
+      }
+    },
+    "automation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model_release_publisher_secret_arn"],
+      "properties": {
+        "model_release_publisher_secret_arn": {"$ref": "#/$defs/awsArn"}
+      }
+    },
+    "domain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "kserve_hostname", "zone_id", "certificate_arn", "public_url"],
+      "properties": {
+        "name": {"$ref": "#/$defs/nullableString"},
+        "kserve_hostname": {"$ref": "#/$defs/nullableString"},
+        "zone_id": {"$ref": "#/$defs/nullableString"},
+        "certificate_arn": {
+          "oneOf": [{"$ref": "#/$defs/awsArn"}, {"type": "null"}]
+        },
+        "public_url": {
+          "oneOf": [
+            {"type": "string", "pattern": "^https://[^/]+$"},
+            {"type": "null"}
+          ]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "awsArn": {
+      "type": "string",
+      "pattern": "^arn:aws[a-z-]*:[a-z0-9-]+:[a-z0-9-]*:[0-9]*:.+$"
+    },
+    "s3Bucket": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"
+    },
+    "nullableString": {"type": ["string", "null"]},
+    "ecrRepository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "url"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "url": {
+          "type": "string",
+          "pattern": "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/.+$"
+        }
+      }
+    }
+  }
+}

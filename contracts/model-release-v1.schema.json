@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chiendz11/iris-gitops/contracts/model-release-v1.schema.json",
+  "title": "Iris model release intent v1",
+  "type": "object",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {"action": {"const": "bootstrap"}},
+        "required": ["action"]
+      },
+      "then": {
+        "properties": {"baseline_model_version": {"type": "null"}}
+      },
+      "else": {
+        "properties": {
+          "baseline_model_version": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          }
+        }
+      }
+    }
+  ],
+  "required": [
+    "contract_version",
+    "model_name",
+    "model_version",
+    "baseline_model_version",
+    "action",
+    "change_id",
+    "run_id",
+    "dataset_version",
+    "source_repository",
+    "source_sha"
+  ],
+  "properties": {
+    "contract_version": {"const": "v1"},
+    "model_name": {
+      "const": "iris-classifier"
+    },
+    "model_version": {
+      "type": "string",
+      "pattern": "^[0-9]+$"
+    },
+    "baseline_model_version": {
+      "oneOf": [
+        {"type": "string", "pattern": "^[0-9]+$"},
+        {"type": "null"}
+      ]
+    },
+    "action": {
+      "enum": ["bootstrap", "canary", "promote", "rollback"]
+    },
+    "change_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]{1,80}$"
+    },
+    "run_id": {"type": "string", "maxLength": 200},
+    "dataset_version": {"type": "string", "maxLength": 200},
+    "source_repository": {"const": "chiendz11/iris-data-pipeline"},
+    "source_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$"
+    }
+  }
+}

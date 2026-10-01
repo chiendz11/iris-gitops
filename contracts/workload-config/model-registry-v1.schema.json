@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chiendz11/iris-model-registry/contracts/runtime-config-v1.schema.json",
+  "title": "Iris MLflow non-secret runtime configuration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "MLFLOW_ALLOWED_HOSTS",
+    "MLFLOW_CORS_ALLOWED_ORIGINS",
+    "MLFLOW_WORKERS"
+  ],
+  "properties": {
+    "MLFLOW_ALLOWED_HOSTS": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!.*\\*)[^\\r\\n]+$"
+    },
+    "MLFLOW_CORS_ALLOWED_ORIGINS": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "pattern": "^(?!.*\\*)https?://[^\\r\\n]+$"
+    },
+    "MLFLOW_WORKERS": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16
+    }
+  }
+}

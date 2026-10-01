@@ -1,0 +1,62 @@
+name: Mint GitOps automation token
+description: Read the GitOps App credential through AWS OIDC and mint a short-lived PR token
+inputs:
+  aws-region:
+    required: true
+    description: AWS region containing the Secrets Manager secret
+  role-arn:
+    required: true
+    description: OIDC role restricted to reading the GitOps automation secret
+  secret-arn:
+    required: true
+    description: Secrets Manager ARN containing client_id and private_key
+  owner:
+    required: true
+    description: GitHub repository owner
+  repository:
+    required: true
+    description: GitHub repository name without owner
+outputs:
+  token:
+    description: Short-lived GitHub App installation token
+    value: ${{ steps.app-token.outputs.token }}
+runs:
+  using: composite
+  steps:
+    - name: Assume GitOps automation secret-reader role
+      uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+      with:
+        role-to-assume: ${{ inputs.role-arn }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - name: Read GitOps automation App credential
+      id: app-credential
+      shell: bash
+      env:
+        SECRET_ARN: ${{ inputs.secret-arn }}
+      run: |
+        set -euo pipefail
+        secret_json="$(aws secretsmanager get-secret-value \
+          --secret-id "${SECRET_ARN}" --query SecretString --output text)"
+        client_id="$(jq -er '.client_id' <<<"${secret_json}")"
+        private_key="$(jq -er '.private_key' <<<"${secret_json}")"
+        echo "::add-mask::${client_id}"
+        while IFS= read -r line; do echo "::add-mask::${line}"; done <<<"${private_key}"
+        delimiter="APP_KEY_${RANDOM}_${RANDOM}"
+        {
+          echo "client_id=${client_id}"
+          echo "private_key<<${delimiter}"
+          printf '%s\n' "${private_key}"
+          echo "${delimiter}"
+        } >> "${GITHUB_OUTPUT}"
+
+    - name: Mint short-lived pull-request token
+      id: app-token
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+      with:
+        client-id: ${{ steps.app-credential.outputs.client_id }}
+        private-key: ${{ steps.app-credential.outputs.private_key }}
+        owner: ${{ inputs.owner }}
+        repositories: ${{ inputs.repository }}
+        permission-contents: write
+        permission-pull-requests: write

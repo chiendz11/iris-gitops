@@ -1,0 +1,142 @@
+name: release-automation-image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - automation/model_release/**
+      - automation/contracts.py
+      - contracts/model-release-v1.schema.json
+      - contracts/model-result-v1.schema.json
+      - .github/workflows/release-automation-image.yml
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+  id-token: write
+
+concurrency:
+  group: release-automation-image-production
+  cancel-in-progress: false
+
+jobs:
+  publish-and-propose:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (vars.AWS_REGION != '' &&
+           vars.RELEASE_AUTOMATION_PUBLISH_AWS_ROLE_ARN != '' &&
+           vars.RELEASE_AUTOMATION_ECR_REPOSITORY != '') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      PUBLISH_ROLE_ARN: ${{ vars.RELEASE_AUTOMATION_PUBLISH_AWS_ROLE_ARN }}
+      ECR_REPOSITORY: ${{ vars.RELEASE_AUTOMATION_ECR_REPOSITORY }}
+    steps:
+      - name: Validate automation configuration
+        run: |
+          set -euo pipefail
+          test -n "${AWS_REGION}"
+          test -n "${PUBLISH_ROLE_ARN}"
+          test -n "${ECR_REPOSITORY}"
+
+      - name: Checkout reviewed automation source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Build release automation without cloud credentials
+        run: |
+          docker build \
+            --file automation/model_release/Dockerfile \
+            --tag "iris-release-automation:${GITHUB_SHA}" .
+
+      - name: Block fixable critical vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: iris-release-automation:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL
+
+      - name: Assume release automation publisher role
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: ${{ env.PUBLISH_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
+
+      - name: Publish immutable image
+        id: publish
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          image_repository="${REGISTRY}/${ECR_REPOSITORY}"
+          image="${image_repository}:${GITHUB_SHA}"
+          image_digest="$(aws ecr batch-get-image \
+            --repository-name "${ECR_REPOSITORY}" \
+            --image-ids "imageTag=${GITHUB_SHA}" \
+            --query 'images[0].imageId.imageDigest' \
+            --output text 2>/dev/null || true)"
+
+          if [[ ! "${image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            docker tag "iris-release-automation:${GITHUB_SHA}" "${image}"
+            docker push "${image}"
+          fi
+
+          for _ in {1..10}; do
+            image_digest="$(aws ecr batch-get-image \
+              --repository-name "${ECR_REPOSITORY}" \
+              --image-ids "imageTag=${GITHUB_SHA}" \
+              --query 'images[0].imageId.imageDigest' \
+              --output text 2>/dev/null || true)"
+            [[ "${image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] && break
+            sleep 2
+          done
+          [[ "${image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          {
+            echo "image_repository=${image_repository}"
+            echo "image_digest=${image_digest}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Keyless-sign immutable automation image
+        env:
+          COSIGN_YES: "true"
+          IMAGE_REPOSITORY: ${{ steps.publish.outputs.image_repository }}
+          IMAGE_DIGEST: ${{ steps.publish.outputs.image_digest }}
+        run: cosign sign "${IMAGE_REPOSITORY}@${IMAGE_DIGEST}"
+
+      - name: Publish image-only workload release intent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_REPOSITORY: ${{ steps.publish.outputs.image_repository }}
+          IMAGE_DIGEST: ${{ steps.publish.outputs.image_digest }}
+        run: |
+          set -euo pipefail
+          contract_file="${RUNNER_TEMP}/release-automation-image.json"
+          jq -n \
+            --arg contract_version v1 \
+            --arg kind workload_release \
+            --arg component release-automation \
+            --arg environment production \
+            --arg repository "${IMAGE_REPOSITORY}" \
+            --arg digest "${IMAGE_DIGEST}" \
+            --arg source_repository "${GITHUB_REPOSITORY}" \
+            --arg source_sha "${GITHUB_SHA}" \
+            --arg change_id "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            '{contract_version:$contract_version,kind:$kind,component:$component,environment:$environment,image:{repository:$repository,digest:$digest},source_repository:$source_repository,source_sha:$source_sha,change_id:$change_id}' \
+            > "${contract_file}"
+          gh workflow run workload-release.yml \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref main \
+            --field contract="$(jq --compact-output . "${contract_file}")"

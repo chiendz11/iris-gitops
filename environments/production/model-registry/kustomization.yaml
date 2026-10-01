@@ -1,7 +1,6 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
-  - namespace.yaml
   - service-account.yaml
   - external-secret.yaml
   - deployment.yaml
@@ -15,7 +14,10 @@ configMapGenerator:
       - POSTGRES_HOST=REPLACE_RDS_ENDPOINT
       - POSTGRES_DB=mlflow
       - MLFLOW_ARTIFACT_BUCKET=REPLACE_MLFLOW_ARTIFACT_BUCKET
-generatorOptions: {disableNameSuffixHash: true}
+      - MLFLOW_ALLOWED_HOSTS=mlflow,mlflow.mlops.svc,mlflow.mlops.svc.cluster.local
+      - MLFLOW_CORS_ALLOWED_ORIGINS=http://mlflow.mlops.svc.cluster.local:5000
+# A config-only release/recovery must change the Deployment's ConfigMap reference.
+generatorOptions: {disableNameSuffixHash: false}
 images:
   - name: iris-mlflow
     newName: REPLACE_ECR_MLFLOW_REPOSITORY
