@@ -26,6 +26,13 @@ updates:
       prefix: deps(release-automation)
   - package-ecosystem: docker
     directory: /automation/model_release
+    # Python minor upgrades require a coordinated dependency/build validation.
+    # Keep patch/digest updates enabled for the supported 3.12 runtime.
+    ignore:
+      - dependency-name: python
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
     schedule:
       interval: weekly
       day: monday
