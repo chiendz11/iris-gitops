@@ -64,5 +64,5 @@ spec:
               dest: spec.arguments.parameters.3.value
             - src:
                 dependencyName: dataset-created
-                dataTemplate: "REPLACE_ECR_TRAINING_REPOSITORY@sha256:{{ index (splitList \"/\" (index .Input.body.Records 0).s3.object.key) 2 }}"
+                dataTemplate: "980794397912.dkr.ecr.ap-southeast-1.amazonaws.com/iris-mlops-prod/training@sha256:{{ index (splitList \"/\" (index .Input.body.Records 0).s3.object.key) 2 }}"
               dest: spec.arguments.parameters.4.value

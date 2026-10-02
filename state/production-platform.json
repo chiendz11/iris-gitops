@@ -1,0 +1,27 @@
+{
+  "aws_region": "ap-southeast-1",
+  "cluster": {
+    "name": "iris-mlops-prod",
+    "vpc_id": "vpc-0fede7eff9e4e881a"
+  },
+  "contract_version": "v1",
+  "ecr_repositories": {
+    "dispatcher": {
+      "name": "iris-mlops-prod/dispatcher",
+      "url": "980794397912.dkr.ecr.ap-southeast-1.amazonaws.com/iris-mlops-prod/dispatcher"
+    },
+    "inference": {
+      "name": "iris-mlops-prod/inference",
+      "url": "980794397912.dkr.ecr.ap-southeast-1.amazonaws.com/iris-mlops-prod/inference"
+    },
+    "mlflow": {
+      "name": "iris-mlops-prod/mlflow",
+      "url": "980794397912.dkr.ecr.ap-southeast-1.amazonaws.com/iris-mlops-prod/mlflow"
+    },
+    "training": {
+      "name": "iris-mlops-prod/training",
+      "url": "980794397912.dkr.ecr.ap-southeast-1.amazonaws.com/iris-mlops-prod/training"
+    }
+  },
+  "environment": "production"
+}

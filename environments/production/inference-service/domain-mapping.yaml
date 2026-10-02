@@ -1,7 +1,7 @@
 apiVersion: networking.internal.knative.dev/v1alpha1
 kind: ClusterDomainClaim
 metadata:
-  name: REPLACE_KSERVE_HOSTNAME
+  name: api.chienqtdemodeploy.app
   annotations: {argocd.argoproj.io/sync-wave: "1"}
 spec:
   namespace: mlops
@@ -9,7 +9,7 @@ spec:
 apiVersion: serving.knative.dev/v1beta1
 kind: DomainMapping
 metadata:
-  name: REPLACE_KSERVE_HOSTNAME
+  name: api.chienqtdemodeploy.app
   namespace: mlops
   annotations: {argocd.argoproj.io/sync-wave: "2"}
 spec:

@@ -13,15 +13,15 @@ spec:
     helm:
       releaseName: aws-load-balancer-controller
       valuesObject:
-        clusterName: REPLACE_EKS_CLUSTER_NAME
+        clusterName: iris-mlops-prod
         region: ap-southeast-1
-        vpcId: REPLACE_VPC_ID
+        vpcId: vpc-0fede7eff9e4e881a
         replicaCount: 2
         serviceAccount:
           create: true
           name: aws-load-balancer-controller
           annotations:
-            eks.amazonaws.com/role-arn: REPLACE_AWS_LOAD_BALANCER_CONTROLLER_ROLE_ARN
+            eks.amazonaws.com/role-arn: arn:aws:iam::980794397912:role/iris-mlops-prod-aws-load-balancer-controller
             eks.amazonaws.com/sts-regional-endpoints: "true"
   destination: {server: "https://kubernetes.default.svc", namespace: kube-system}
   syncPolicy:

@@ -11,9 +11,9 @@ configMapGenerator:
   - name: mlflow-config
     namespace: mlops
     literals:
-      - POSTGRES_HOST=REPLACE_RDS_ENDPOINT
+      - POSTGRES_HOST=iris-mlops-prod-mlflow.c5yqgcw0kopi.ap-southeast-1.rds.amazonaws.com
       - POSTGRES_DB=mlflow
-      - MLFLOW_ARTIFACT_BUCKET=REPLACE_MLFLOW_ARTIFACT_BUCKET
+      - MLFLOW_ARTIFACT_BUCKET=iris-mlops-prod-mlflow-794f8f04
       - MLFLOW_ALLOWED_HOSTS=mlflow,mlflow.mlops.svc,mlflow.mlops.svc.cluster.local
       - MLFLOW_CORS_ALLOWED_ORIGINS=http://mlflow.mlops.svc.cluster.local:5000
 # A config-only release/recovery must change the Deployment's ConfigMap reference.
