@@ -15,7 +15,7 @@ spec:
     parameters:
       - {name: training-image, value: TRAINING_IMAGE_FROM_EVENT_REQUIRED}
       - {name: release-automation-image, value: RELEASE_AUTOMATION_IMAGE_NOT_PUBLISHED}
-      - {name: dataset-bucket, value: REPLACE_DVC_BUCKET}
+      - {name: dataset-bucket, value: iris-mlops-prod-dvc-794f8f04}
       - {name: dataset-key, value: datasets/iris.csv}
       - {name: dataset-version, value: unknown}
       - {name: source-sha, value: unknown}

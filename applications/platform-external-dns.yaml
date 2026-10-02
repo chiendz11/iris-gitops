@@ -20,15 +20,15 @@ spec:
         registry: txt
         txtOwnerId: iris-mlops-prod
         domainFilters:
-          - REPLACE_PUBLIC_DOMAIN_NAME
+          - chienqtdemodeploy.app
         extraArgs:
           aws-zone-type: public
-          zone-id-filter: REPLACE_ROUTE53_ZONE_ID
+          zone-id-filter: Z088223230YYBEX6OYV2Y
         serviceAccount:
           create: true
           name: external-dns
           annotations:
-            eks.amazonaws.com/role-arn: REPLACE_EXTERNAL_DNS_IRSA_ROLE_ARN
+            eks.amazonaws.com/role-arn: arn:aws:iam::980794397912:role/iris-mlops-prod-external-dns
             eks.amazonaws.com/sts-regional-endpoints: "true"
   destination: {server: "https://kubernetes.default.svc", namespace: external-dns}
   syncPolicy:

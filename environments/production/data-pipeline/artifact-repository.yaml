@@ -9,7 +9,7 @@ data:
   default-v1: |
     archiveLogs: true
     s3:
-      bucket: REPLACE_ARGO_ARTIFACT_BUCKET
+      bucket: iris-mlops-prod-argo-794f8f04
       endpoint: s3.amazonaws.com
       region: ap-southeast-1
       keyFormat: argo/{{workflow.namespace}}/{{workflow.name}}/{{pod.name}}

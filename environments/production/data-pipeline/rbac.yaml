@@ -4,7 +4,7 @@ metadata:
   name: iris-training
   namespace: argo
   annotations:
-    eks.amazonaws.com/role-arn: REPLACE_TRAINING_IRSA_ROLE_ARN
+    eks.amazonaws.com/role-arn: arn:aws:iam::980794397912:role/iris-mlops-prod-training
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

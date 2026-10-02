@@ -25,11 +25,11 @@ patches:
           service.beta.kubernetes.io/aws-load-balancer-type: external
           service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
           service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
-          service.beta.kubernetes.io/aws-load-balancer-ssl-cert: REPLACE_PUBLIC_ACM_CERTIFICATE_ARN
+          service.beta.kubernetes.io/aws-load-balancer-ssl-cert: arn:aws:acm:ap-southeast-1:980794397912:certificate/9c835e4e-830c-48d0-86cc-1c68404db5eb
           service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "443"
           service.beta.kubernetes.io/aws-load-balancer-backend-protocol: tcp
           service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: TCP
-          external-dns.alpha.kubernetes.io/hostname: REPLACE_KSERVE_HOSTNAME
+          external-dns.alpha.kubernetes.io/hostname: api.chienqtdemodeploy.app
       - op: replace
         path: /spec/ports/1/targetPort
         value: 8080

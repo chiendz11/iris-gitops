@@ -4,7 +4,7 @@ metadata:
   name: sqs-eventsource-sa
   namespace: argo-events
   annotations:
-    eks.amazonaws.com/role-arn: REPLACE_ARGO_EVENTS_IRSA_ROLE_ARN
+    eks.amazonaws.com/role-arn: arn:aws:iam::980794397912:role/iris-mlops-prod-argo-events
 ---
 apiVersion: argoproj.io/v1alpha1
 kind: EventSource
@@ -17,5 +17,5 @@ spec:
     dataset:
       jsonBody: true
       region: ap-southeast-1
-      queue: REPLACE_DATASET_SQS_QUEUE_NAME
+      queue: iris-mlops-prod-dataset-events
       waitTimeSeconds: 20
