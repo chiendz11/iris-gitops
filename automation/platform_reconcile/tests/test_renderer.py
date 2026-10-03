@@ -102,6 +102,23 @@ def test_renders_platform_fields_and_stable_image_allow_list(tmp_path: Path) -> 
     assert values["clusterName"] == "iris-mlops-prod"
     assert values["vpcId"] == "vpc-0123abcdef"
 
+    kserve = yaml.safe_load((root / "applications/platform-kserve.yaml").read_text())
+    assert (
+        kserve["spec"]["source"]["helm"]["valuesObject"]["kserve"]["controller"][
+            "deploymentMode"
+        ]
+        == "Knative"
+    )
+    inference = yaml.safe_load(
+        (
+            root
+            / "environments/production/inference-service/inferenceservice.yaml"
+        ).read_text()
+    )
+    assert "serving.kserve.io/deploymentMode" not in inference["metadata"].get(
+        "annotations", {}
+    )
+
     sensor = (root / "environments/production/data-pipeline/sensor.yaml").read_text()
     assert payload["ecr_repositories"]["training"]["url"] in sensor
     secret = (root / "environments/production/data-pipeline/external-secret.yaml").read_text()

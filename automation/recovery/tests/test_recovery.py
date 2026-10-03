@@ -28,7 +28,8 @@ def set_model(root: Path, version: str, *, canary: bool = False) -> None:
             item["value"] = f"models:/iris-classifier/{version}"
         if item["name"] == "MODEL_VERSION":
             item["value"] = version
-    doc["metadata"]["annotations"]["mlops.iris/stable-model-version"] = "7" if canary else version
+    annotations = doc["metadata"].setdefault("annotations", {})
+    annotations["mlops.iris/stable-model-version"] = "7" if canary else version
     if canary:
         doc["spec"]["predictor"]["canaryTrafficPercent"] = 10
         doc["metadata"]["annotations"]["mlops.iris/candidate-model-version"] = version

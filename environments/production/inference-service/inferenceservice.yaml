@@ -3,8 +3,6 @@ kind: InferenceService
 metadata:
   name: iris-classifier
   namespace: mlops
-  annotations:
-    serving.kserve.io/deploymentMode: Serverless
 spec:
   predictor:
     minReplicas: 1
