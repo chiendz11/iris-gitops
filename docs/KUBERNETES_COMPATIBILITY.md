@@ -14,6 +14,12 @@ certificate; the cert-manager Application must therefore become Healthy before K
 The regression test ties the CI schema/client and observer skew to this profile. Review the
 observer image's availability as part of deployment preflight, not just its version number.
 
+The KServe chart is the single owner of the deployment mode and sets the cluster default to
+`Knative`. InferenceServices intentionally omit the per-service deployment-mode annotation.
+KServe v0.19.0 has an upstream first-reconcile regression where an explicit `Knative`
+annotation can be rejected as an attempted transition from `Standard` before status is
+initialized (kserve/kserve#5793). Revisit this workaround when the controller is upgraded.
+
 This does not prove every chart/image/add-on works on EKS: no cluster was created or upgraded
 by this change. Verify regional EKS/add-on availability, chart rendering, webhooks, storage,
 readiness and the full model lifecycle before calling the installation production-ready.
