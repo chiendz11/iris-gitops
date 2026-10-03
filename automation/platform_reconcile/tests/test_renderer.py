@@ -79,6 +79,16 @@ def isolated_root(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def unresolved_placeholders(root: Path) -> set[str]:
+    unresolved: set[str] = set()
+    for directory in ("applications", "platform", "environments"):
+        for path in (root / directory).rglob("*.yaml"):
+            if "examples" in path.parts:
+                continue
+            unresolved.update(re.findall(r"REPLACE_[A-Z0-9_]+", path.read_text()))
+    return unresolved
+
+
 def test_renders_platform_fields_and_stable_image_allow_list(tmp_path: Path) -> None:
     root = isolated_root(tmp_path)
     payload = contract()
@@ -101,17 +111,36 @@ def test_renders_platform_fields_and_stable_image_allow_list(tmp_path: Path) -> 
     assert state["ecr_repositories"]["inference"] == payload["ecr_repositories"]["inference"]
     assert "source_sha" not in state
 
-    unresolved = set()
-    for directory in ("applications", "platform", "environments"):
-        for path in (root / directory).rglob("*.yaml"):
-            if "examples" in path.parts:
-                continue
-            unresolved.update(re.findall(r"REPLACE_[A-Z0-9_]+", path.read_text()))
-    assert unresolved == {
+    unresolved = unresolved_placeholders(root)
+    workload_bootstrap_placeholders = {
         "REPLACE_ECR_INFERENCE_IMAGE",
         "REPLACE_ECR_MLFLOW_REPOSITORY",
         "REPLACE_IMAGE_TAG",
     }
+    # Platform reconciliation owns AWS/EKS-derived fields, not workload releases.
+    # A bootstrap repository may still contain these placeholders, while a day-2
+    # repository may already contain one or both immutable workload digests.
+    assert unresolved <= workload_bootstrap_placeholders
+    assert ("REPLACE_ECR_MLFLOW_REPOSITORY" in unresolved) == (
+        "REPLACE_IMAGE_TAG" in unresolved
+    )
+
+
+def test_platform_reconcile_accepts_an_existing_workload_release(tmp_path: Path) -> None:
+    root = isolated_root(tmp_path)
+    registry = root / "environments/production/model-registry/kustomization.yaml"
+    released = registry.read_text().replace(
+        "newName: REPLACE_ECR_MLFLOW_REPOSITORY",
+        f"newName: {ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/iris-mlops-prod/mlflow",
+    ).replace(
+        "newTag: REPLACE_IMAGE_TAG",
+        f"digest: sha256:{'b' * 64}",
+    )
+    registry.write_text(released)
+
+    render_platform_contract(root, contract())
+
+    assert unresolved_placeholders(root) == {"REPLACE_ECR_INFERENCE_IMAGE"}
 
 
 def test_rejects_untrusted_producer() -> None:
