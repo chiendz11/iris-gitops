@@ -18,8 +18,8 @@ spec:
             gateway:
               disableIstioVirtualHost: true
               localGateway:
-                gatewayService: kourier-internal.knative-serving.svc.cluster.local
-                knativeGatewayService: kourier-internal.knative-serving.svc.cluster.local
+                gatewayService: kourier-internal.kourier-system.svc.cluster.local
+                knativeGatewayService: kourier-internal.kourier-system.svc.cluster.local
   destination: {server: "https://kubernetes.default.svc", namespace: kserve}
   syncPolicy:
     automated: {prune: true, selfHeal: true}
