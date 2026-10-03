@@ -31,7 +31,11 @@ def promote(
     try:
         current_version = str(client.get_model_version_by_alias(model_name, alias).version)
     except MlflowException as error:
-        if error.error_code != "RESOURCE_DOES_NOT_EXIST":
+        missing_alias = error.error_code == "RESOURCE_DOES_NOT_EXIST" or (
+            error.error_code == "INVALID_PARAMETER_VALUE"
+            and str(error).endswith(f"Registered model alias {alias} not found.")
+        )
+        if not missing_alias:
             raise
         current_version = None
 
