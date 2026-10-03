@@ -1,0 +1,28 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-cert-manager
+  namespace: argocd
+  annotations: {argocd.argoproj.io/sync-wave: "-32"}
+spec:
+  project: iris-production
+  source:
+    repoURL: https://charts.jetstack.io
+    chart: cert-manager
+    targetRevision: v1.21.2
+    helm:
+      releaseName: cert-manager
+      valuesObject:
+        crds:
+          enabled: true
+          keep: true
+        prometheus:
+          enabled: true
+          servicemonitor:
+            enabled: true
+            labels: {release: monitoring}
+  destination: {server: "https://kubernetes.default.svc", namespace: cert-manager}
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [ServerSideApply=true]
+    retry: {limit: 10}

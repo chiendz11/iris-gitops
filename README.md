@@ -21,7 +21,7 @@ và merge, Argo CD mới reconcile EKS.
 ```text
 iris-gitops
 ├── applications/                    AppProject và App-of-Apps children
-├── platform/                        namespaces, Knative, KServe, monitoring, External Secrets
+├── platform/                        namespaces, cert-manager, Knative, KServe, monitoring, External Secrets
 ├── environments/production/         MLflow, training DAG và InferenceService
 ├── contracts/
 │   ├── workload-release-v1.schema.json
@@ -165,14 +165,15 @@ image ban đầu được thay atomically bởi workload-release PR đầu tiên
 | Terraform (`iris-infrastructure`) | Argo CD (`iris-gitops`) |
 |---|---|
 | VPC, endpoint, EKS, node group | AppProject và child Applications |
-| RDS Multi-AZ, S3, SQS, ECR | Knative, KServe, monitoring |
+| RDS Multi-AZ, S3, SQS, ECR | cert-manager, Knative, KServe, monitoring |
 | IAM/OIDC/IRSA, Route53, ACM | ExternalSecret và workload manifests |
 | `helm_release.argocd` | MLflow, training lifecycle, inference |
 | Root Application bootstrap | Auto-sync/prune/self-heal children |
 
 Argo CD không self-manage. Repo này không chứa `platform-argocd.yaml`, Helm install hoặc bootstrap
-script cho Argo CD. Upgrade Argo CD là infrastructure PR; upgrade KServe/Knative/monitoring là
-GitOps PR. GitHub Actions không chạy `kubectl apply`, `helm upgrade` hoặc `argocd app sync`.
+script cho Argo CD. Upgrade Argo CD là infrastructure PR; upgrade
+cert-manager/KServe/Knative/monitoring là GitOps PR. GitHub Actions không chạy `kubectl apply`,
+`helm upgrade` hoặc `argocd app sync`.
 
 `platform-namespaces` là owner duy nhất của các Namespace dùng chung (`mlops`, `argo`,
 `argo-events`, monitoring và controller namespaces). Child Applications không dùng
