@@ -14,7 +14,7 @@ configMapGenerator:
   - POSTGRES_HOST=iris-mlops-prod-mlflow.c5yqgcw0kopi.ap-southeast-1.rds.amazonaws.com
   - POSTGRES_DB=mlflow
   - MLFLOW_ARTIFACT_BUCKET=iris-mlops-prod-mlflow-794f8f04
-  - MLFLOW_ALLOWED_HOSTS=mlflow,mlflow.mlops.svc,mlflow.mlops.svc.cluster.local
+  - MLFLOW_ALLOWED_HOSTS=mlflow,mlflow:5000,mlflow.mlops.svc,mlflow.mlops.svc:5000,mlflow.mlops.svc.cluster.local,mlflow.mlops.svc.cluster.local:5000
   - MLFLOW_CORS_ALLOWED_ORIGINS=http://mlflow.mlops.svc.cluster.local:5000
   - MLFLOW_WORKERS=1
   - MLFLOW_SERVER_ENABLE_JOB_EXECUTION=false
