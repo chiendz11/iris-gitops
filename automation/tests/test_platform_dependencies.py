@@ -39,6 +39,52 @@ def test_cert_manager_is_pinned_and_precedes_kserve() -> None:
     assert sync_wave(cert_manager) < sync_wave(kserve)
 
 
+def test_metrics_server_is_pinned_ha_and_precedes_knative() -> None:
+    metrics_server = load("applications/platform-metrics-server.yaml")
+    knative = load("applications/platform-knative.yaml")
+
+    assert metrics_server["spec"]["source"] == {
+        "repoURL": "https://kubernetes-sigs.github.io/metrics-server/",
+        "chart": "metrics-server",
+        "targetRevision": "3.13.1",
+        "helm": {
+            "releaseName": "metrics-server",
+            "valuesObject": {
+                "replicas": 2,
+                "podDisruptionBudget": {
+                    "enabled": True,
+                    "maxUnavailable": 1,
+                },
+                "topologySpreadConstraints": [
+                    {
+                        "maxSkew": 1,
+                        "topologyKey": "kubernetes.io/hostname",
+                        "whenUnsatisfiable": "ScheduleAnyway",
+                        "labelSelector": {
+                            "matchLabels": {
+                                "app.kubernetes.io/instance": "metrics-server",
+                                "app.kubernetes.io/name": "metrics-server",
+                            }
+                        },
+                    }
+                ],
+            },
+        },
+    }
+    assert sync_wave(metrics_server) < sync_wave(knative)
+
+
+def test_metrics_server_is_reachable_from_the_app_of_apps() -> None:
+    root = load("applications/kustomization.yaml")
+    project = load("applications/project.yaml")
+
+    assert "platform-metrics-server.yaml" in root["resources"]
+    assert (
+        "https://kubernetes-sigs.github.io/metrics-server/"
+        in project["spec"]["sourceRepos"]
+    )
+
+
 def test_cert_manager_is_reachable_from_the_app_of_apps() -> None:
     root = load("applications/kustomization.yaml")
     project = load("applications/project.yaml")

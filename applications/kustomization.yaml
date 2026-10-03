@@ -9,6 +9,7 @@ resources:
   - platform-external-secrets.yaml
   - platform-external-secrets-config.yaml
   - platform-monitoring.yaml
+  - platform-metrics-server.yaml
   - platform-argocd-monitoring.yaml
   - platform-aws-load-balancer-controller.yaml
   - platform-external-dns.yaml

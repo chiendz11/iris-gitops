@@ -1,0 +1,32 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-metrics-server
+  namespace: argocd
+  annotations: {argocd.argoproj.io/sync-wave: "-38"}
+spec:
+  project: iris-production
+  source:
+    repoURL: https://kubernetes-sigs.github.io/metrics-server/
+    chart: metrics-server
+    targetRevision: 3.13.1
+    helm:
+      releaseName: metrics-server
+      valuesObject:
+        replicas: 2
+        podDisruptionBudget:
+          enabled: true
+          maxUnavailable: 1
+        topologySpreadConstraints:
+          - maxSkew: 1
+            topologyKey: kubernetes.io/hostname
+            whenUnsatisfiable: ScheduleAnyway
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/instance: metrics-server
+                app.kubernetes.io/name: metrics-server
+  destination: {server: "https://kubernetes.default.svc", namespace: kube-system}
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [ServerSideApply=true]
+    retry: {limit: 10}
