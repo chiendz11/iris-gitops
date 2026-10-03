@@ -17,6 +17,7 @@ configMapGenerator:
   - MLFLOW_ALLOWED_HOSTS=mlflow,mlflow.mlops.svc,mlflow.mlops.svc.cluster.local
   - MLFLOW_CORS_ALLOWED_ORIGINS=http://mlflow.mlops.svc.cluster.local:5000
   - MLFLOW_WORKERS=1
+  - MLFLOW_SERVER_ENABLE_JOB_EXECUTION=false
 generatorOptions:
   disableNameSuffixHash: false
 images:
