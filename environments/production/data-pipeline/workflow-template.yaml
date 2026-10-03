@@ -14,7 +14,7 @@ spec:
   arguments:
     parameters:
       - {name: training-image, value: TRAINING_IMAGE_FROM_EVENT_REQUIRED}
-      - {name: release-automation-image, value: 980794397912.dkr.ecr.ap-southeast-1.amazonaws.com/iris-mlops-prod/dispatcher@sha256:0451fab05cf46783a0b0d5f4366837102f4570db4f2b963f232fc1b13e946bc9}
+      - {name: release-automation-image, value: 980794397912.dkr.ecr.ap-southeast-1.amazonaws.com/iris-mlops-prod/dispatcher@sha256:bf6e8c199cf95cf51f59a2b27c67068ffb93436fce5feab53ef60115d0f64039}
       - {name: dataset-bucket, value: iris-mlops-prod-dvc-794f8f04}
       - {name: dataset-key, value: datasets/iris.csv}
       - {name: dataset-version, value: unknown}
