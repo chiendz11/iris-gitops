@@ -38,8 +38,8 @@ def isolated_root(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def schema_digest(root: Path, component: str) -> str:
-    data = (root / f"contracts/workload-config/{component}-v1.schema.json").read_bytes()
+def schema_digest(root: Path, component: str, version: str = "v1") -> str:
+    data = (root / f"contracts/workload-config/{component}-{version}.schema.json").read_bytes()
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
@@ -254,6 +254,42 @@ def test_model_registry_release_updates_digest_and_config(tmp_path: Path) -> Non
     assert desired["images"][0]["digest"] == "sha256:" + "c" * 64
     assert "newTag" not in desired["images"][0]
     assert "MLFLOW_WORKERS=3" in desired["configMapGenerator"][0]["literals"]
+
+
+def test_model_registry_v2_disables_unused_job_execution(tmp_path: Path) -> None:
+    root = isolated_root(tmp_path)
+    payload = {
+        "contract_version": "v1",
+        "kind": "workload_release",
+        "component": "model-registry",
+        "environment": "production",
+        "runtime_config": {
+            "MLFLOW_ALLOWED_HOSTS": "mlflow,mlflow.mlops.svc.cluster.local",
+            "MLFLOW_CORS_ALLOWED_ORIGINS": "http://mlflow.mlops.svc.cluster.local:5000",
+            "MLFLOW_SERVER_ENABLE_JOB_EXECUTION": False,
+            "MLFLOW_WORKERS": 1,
+        },
+        "config_schema_version": "v2",
+        "config_schema_digest": schema_digest(root, "model-registry", "v2"),
+        "required_config": [
+            "MLFLOW_ALLOWED_HOSTS",
+            "MLFLOW_CORS_ALLOWED_ORIGINS",
+            "MLFLOW_SERVER_ENABLE_JOB_EXECUTION",
+            "MLFLOW_WORKERS",
+        ],
+        "source_repository": "chiendz11/iris-model-registry",
+        "source_sha": "e" * 40,
+        "change_id": "config-only-v2",
+    }
+
+    render_workload_release(root, payload)
+
+    desired = yaml.safe_load(
+        (root / "environments/production/model-registry/kustomization.yaml").read_text()
+    )
+    literals = desired["configMapGenerator"][0]["literals"]
+    assert "MLFLOW_SERVER_ENABLE_JOB_EXECUTION=false" in literals
+    assert "MLFLOW_WORKERS=1" in literals
 
 
 def test_release_automation_supports_image_only(tmp_path: Path) -> None:
