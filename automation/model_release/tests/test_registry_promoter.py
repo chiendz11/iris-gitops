@@ -82,6 +82,27 @@ def test_retry_after_success_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> N
     )
 
 
+def test_bootstrap_accepts_sql_backend_missing_alias(monkeypatch) -> None:
+    client = _client(current=None)
+    client.get_model_version_by_alias.side_effect = registry_promoter.MlflowException(
+        "Registered model alias champion not found.", error_code="INVALID_PARAMETER_VALUE"
+    )
+    monkeypatch.setattr(registry_promoter, "MlflowClient", lambda: client)
+    registry_promoter.promote("iris-classifier", "1", "http://mlflow", None)
+    client.set_registered_model_alias.assert_called_once_with("iris-classifier", "champion", "1")
+
+
+def test_bootstrap_rejects_other_invalid_parameter_errors(monkeypatch) -> None:
+    client = _client(current=None)
+    client.get_model_version_by_alias.side_effect = registry_promoter.MlflowException(
+        "Invalid model name", error_code="INVALID_PARAMETER_VALUE"
+    )
+    monkeypatch.setattr(registry_promoter, "MlflowClient", lambda: client)
+    with pytest.raises(registry_promoter.MlflowException):
+        registry_promoter.promote("iris-classifier", "1", "http://mlflow", None)
+    client.set_registered_model_alias.assert_not_called()
+
+
 def test_mlflow_error_is_not_treated_as_missing_alias(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
