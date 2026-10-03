@@ -9,11 +9,10 @@ spec:
   predictor:
     minReplicas: 1
     maxReplicas: 3
-    podMetadata:
-      annotations:
-        prometheus.io/scrape: "true"
-        prometheus.io/path: /metrics
-        prometheus.io/port: "8080"
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/path: /metrics
+      prometheus.io/port: "8080"
     containers:
       - name: kserve-container
         image: REPLACE_ECR_INFERENCE_IMAGE

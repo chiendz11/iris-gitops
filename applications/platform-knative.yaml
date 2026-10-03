@@ -11,21 +11,23 @@ spec:
     targetRevision: main
     path: platform/knative
   destination: {server: "https://kubernetes.default.svc", namespace: knative-serving}
-  # Knative injects and rotates these CA bundles at runtime. Ignore only that
-  # controller-owned field; every other webhook field remains GitOps-managed.
+  # The Knative webhook controller expands the upstream bootstrap stubs into
+  # complete webhook rules and owns their certificates at runtime. Ignore only
+  # fields recorded under that controller's managed-fields identity on these
+  # three named resources; Argo CD still owns the objects and every other field.
   ignoreDifferences:
     - group: admissionregistration.k8s.io
       kind: MutatingWebhookConfiguration
       name: webhook.serving.knative.dev
-      jqPathExpressions: [".webhooks[]?.clientConfig.caBundle"]
+      managedFieldsManagers: [webhook]
     - group: admissionregistration.k8s.io
       kind: ValidatingWebhookConfiguration
       name: config.webhook.serving.knative.dev
-      jqPathExpressions: [".webhooks[]?.clientConfig.caBundle"]
+      managedFieldsManagers: [webhook]
     - group: admissionregistration.k8s.io
       kind: ValidatingWebhookConfiguration
       name: validation.webhook.serving.knative.dev
-      jqPathExpressions: [".webhooks[]?.clientConfig.caBundle"]
+      managedFieldsManagers: [webhook]
   syncPolicy:
     automated: {prune: true, selfHeal: true}
     syncOptions: [ServerSideApply=true, RespectIgnoreDifferences=true]
