@@ -239,9 +239,9 @@ spec:
       inputs:
         parameters: [{name: traffic}, {name: version}]
       container:
-        # Read-only observer: 1.33 is within one minor of the EKS 1.34 profile.
-        # Revisit this client/image when changing the cluster minor version.
-        image: bitnami/kubectl:1.33
+        # Read-only observer; includes the POSIX shell used below. Pin the
+        # verified multi-architecture digest as well as the kubectl version.
+        image: alpine/kubectl:1.34.0@sha256:a98a63b456426205a1de5d78190df07ddfda535276902f14d3a21cd2789d47e4
         command: [/bin/sh, -ec]
         env:
           - {name: EXPECTED_VERSION, value: "{{inputs.parameters.version}}"}

@@ -6,13 +6,16 @@ GitOps CI uses kubectl `v1.34.0` and kubeconform schemas `1.34.0`. KServe is sti
 pinned to `v1.21.2` and owns its CRDs through the Helm release.
 
 KServe's versioned [0.19 compatibility matrix](https://kserve.github.io/website/docs/0.19/admin-guide/serverless)
-includes Kubernetes 1.34 with Knative 1.20. The rollout observer's existing kubectl 1.33
+includes Kubernetes 1.34 with Knative 1.20. The rollout observer uses kubectl 1.34
 client is within Kubernetes' [one-minor skew policy](https://kubernetes.io/releases/version-skew-policy/#kubectl).
 cert-manager 1.21 supports Kubernetes 1.33 through 1.36, covering both the live 1.33 cluster
 and the reviewed 1.34 profile. KServe requires cert-manager to issue its admission-webhook
 certificate; the cert-manager Application must therefore become Healthy before KServe resources.
 The regression test ties the CI schema/client and observer skew to this profile. Review the
 observer image's availability as part of deployment preflight, not just its version number.
+The observer uses `alpine/kubectl:1.34.0` pinned by digest; its shell, date command,
+and kubectl client were checked locally. The former `bitnami/kubectl:1.33` tag
+was unavailable during the production bootstrap.
 
 The KServe chart is the single owner of the deployment mode and sets the cluster default to
 `Knative`. InferenceServices intentionally omit the per-service deployment-mode annotation.
