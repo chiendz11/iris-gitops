@@ -1,4 +1,4 @@
-FROM python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
+FROM python:3.12-slim@sha256:dddfd7e07f9d15aeeca61529320492139d21cac7f0070c00609243e51e4e0016
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -7,7 +7,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 COPY automation/model_release/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir --requirement /tmp/requirements.txt \
+RUN apt-get update \
+    && apt-get upgrade --yes \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir --requirement /tmp/requirements.txt \
     && useradd --create-home --uid 10001 automation
 
 COPY automation/__init__.py automation/contracts.py ./automation/
