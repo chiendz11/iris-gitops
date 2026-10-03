@@ -60,7 +60,7 @@ def test_cert_manager_is_reachable_from_the_app_of_apps() -> None:
     }
 
 
-def test_knative_ignores_only_controller_managed_ca_bundles() -> None:
+def test_knative_ignores_only_fields_owned_by_its_webhook_controller() -> None:
     knative = load("applications/platform-knative.yaml")
     ignored = knative["spec"]["ignoreDifferences"]
 
@@ -69,18 +69,33 @@ def test_knative_ignores_only_controller_managed_ca_bundles() -> None:
         "RespectIgnoreDifferences=true",
     ]
     assert {
-        (item["kind"], item["name"]): item["jqPathExpressions"] for item in ignored
+        (item["kind"], item["name"]): item["managedFieldsManagers"]
+        for item in ignored
     } == {
         (
             "MutatingWebhookConfiguration",
             "webhook.serving.knative.dev",
-        ): [".webhooks[]?.clientConfig.caBundle"],
+        ): ["webhook"],
         (
             "ValidatingWebhookConfiguration",
             "config.webhook.serving.knative.dev",
-        ): [".webhooks[]?.clientConfig.caBundle"],
+        ): ["webhook"],
         (
             "ValidatingWebhookConfiguration",
             "validation.webhook.serving.knative.dev",
-        ): [".webhooks[]?.clientConfig.caBundle"],
+        ): ["webhook"],
+    }
+
+
+def test_kserve_v019_predictor_uses_supported_metadata_field() -> None:
+    inference_service = load(
+        "environments/production/inference-service/inferenceservice.yaml"
+    )
+    predictor = inference_service["spec"]["predictor"]
+
+    assert "podMetadata" not in predictor
+    assert predictor["annotations"] == {
+        "prometheus.io/scrape": "true",
+        "prometheus.io/path": "/metrics",
+        "prometheus.io/port": "8080",
     }
