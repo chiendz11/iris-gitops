@@ -38,6 +38,41 @@ def isolated_root(tmp_path: Path) -> Path:
     return tmp_path
 
 
+
+def _set_stable_inference_baseline(root: Path) -> None:
+    # Normalize inference state for tests that are not exercising a model rollout.
+    manifest_path = (
+        root / "environments/production/inference-service/inferenceservice.yaml"
+    )
+    manifest = yaml.safe_load(manifest_path.read_text())
+    predictor = manifest["spec"]["predictor"]
+    annotations = manifest["metadata"].setdefault("annotations", {})
+
+    stable_version = annotations.get("mlops.iris/stable-model-version")
+    if stable_version is None:
+        raise AssertionError(
+            "Stable inference fixture requires mlops.iris/stable-model-version"
+        )
+
+    predictor.pop("canaryTrafficPercent", None)
+    annotations.pop("mlops.iris/candidate-model-version", None)
+
+    for item in predictor["containers"][0].get("env", []):
+        if item.get("name") == "MODEL_URI":
+            item["value"] = f"models:/iris-classifier/{stable_version}"
+        elif item.get("name") == "MODEL_VERSION":
+            item["value"] = str(stable_version)
+
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False))
+
+
+def stable_inference_root(tmp_path: Path) -> Path:
+    # Deterministic stable baseline independent of GitOps main/PR state.
+    root = isolated_root(tmp_path)
+    _set_stable_inference_baseline(root)
+    return root
+
+
 def schema_digest(root: Path, component: str, version: str = "v1") -> str:
     data = (root / f"contracts/workload-config/{component}-{version}.schema.json").read_bytes()
     return "sha256:" + hashlib.sha256(data).hexdigest()
@@ -70,7 +105,7 @@ def inference_contract(root: Path) -> dict:
 
 
 def test_atomic_image_and_config_release(tmp_path: Path) -> None:
-    root = isolated_root(tmp_path)
+    root = stable_inference_root(tmp_path)
     render_workload_release(root, inference_contract(root))
     manifest = yaml.safe_load(
         (root / "environments/production/inference-service/inferenceservice.yaml").read_text()
@@ -82,7 +117,7 @@ def test_atomic_image_and_config_release(tmp_path: Path) -> None:
 
 
 def test_config_only_release_keeps_current_image(tmp_path: Path) -> None:
-    root = isolated_root(tmp_path)
+    root = stable_inference_root(tmp_path)
     payload = inference_contract(root)
     render_workload_release(root, payload)
     del payload["image"]
@@ -97,7 +132,7 @@ def test_config_only_release_keeps_current_image(tmp_path: Path) -> None:
 
 
 def test_image_only_release_validates_and_keeps_current_config(tmp_path: Path) -> None:
-    root = isolated_root(tmp_path)
+    root = stable_inference_root(tmp_path)
     payload = inference_contract(root)
     before = yaml.safe_load(
         (root / "environments/production/inference-service/inferenceservice.yaml").read_text()
@@ -114,7 +149,7 @@ def test_image_only_release_validates_and_keeps_current_config(tmp_path: Path) -
 
 
 def test_image_only_rejects_incompatible_current_config(tmp_path: Path) -> None:
-    root = isolated_root(tmp_path)
+    root = stable_inference_root(tmp_path)
     manifest_path = root / "environments/production/inference-service/inferenceservice.yaml"
     manifest = yaml.safe_load(manifest_path.read_text())
     container = manifest["spec"]["predictor"]["containers"][0]
@@ -130,7 +165,7 @@ def test_image_only_rejects_incompatible_current_config(tmp_path: Path) -> None:
 
 
 def test_inference_release_is_blocked_during_model_canary(tmp_path: Path) -> None:
-    root = isolated_root(tmp_path)
+    root = stable_inference_root(tmp_path)
     manifest_path = root / "environments/production/inference-service/inferenceservice.yaml"
     manifest = yaml.safe_load(manifest_path.read_text())
     manifest["spec"]["predictor"]["canaryTrafficPercent"] = 10
@@ -142,10 +177,48 @@ def test_inference_release_is_blocked_during_model_canary(tmp_path: Path) -> Non
         validate_workload_release(root, inference_contract(root))
 
 
-def test_rejects_required_config_that_disagrees_with_approved_schema(
+
+def test_stable_inference_fixture_does_not_inherit_active_canary(
     tmp_path: Path,
 ) -> None:
     root = isolated_root(tmp_path)
+    manifest_path = (
+        root / "environments/production/inference-service/inferenceservice.yaml"
+    )
+    manifest = yaml.safe_load(manifest_path.read_text())
+    predictor = manifest["spec"]["predictor"]
+    annotations = manifest["metadata"].setdefault("annotations", {})
+    stable_version = annotations["mlops.iris/stable-model-version"]
+
+    annotations["mlops.iris/candidate-model-version"] = "999"
+    predictor["canaryTrafficPercent"] = 10
+    for item in predictor["containers"][0].get("env", []):
+        if item.get("name") == "MODEL_URI":
+            item["value"] = "models:/iris-classifier/999"
+        elif item.get("name") == "MODEL_VERSION":
+            item["value"] = "999"
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False))
+
+    _set_stable_inference_baseline(root)
+
+    stable = yaml.safe_load(manifest_path.read_text())
+    stable_predictor = stable["spec"]["predictor"]
+    stable_annotations = stable["metadata"].get("annotations", {})
+    stable_env = {
+        item["name"]: item.get("value")
+        for item in stable_predictor["containers"][0].get("env", [])
+    }
+
+    assert "mlops.iris/candidate-model-version" not in stable_annotations
+    assert "canaryTrafficPercent" not in stable_predictor
+    assert stable_env["MODEL_VERSION"] == str(stable_version)
+    assert stable_env["MODEL_URI"] == f"models:/iris-classifier/{stable_version}"
+
+
+def test_rejects_required_config_that_disagrees_with_approved_schema(
+    tmp_path: Path,
+) -> None:
+    root = stable_inference_root(tmp_path)
     payload = inference_contract(root)
     payload["required_config"] = ["DRIFT_WINDOW_SIZE"]
     with pytest.raises(ValueError, match="exactly match"):
@@ -153,7 +226,7 @@ def test_rejects_required_config_that_disagrees_with_approved_schema(
 
 
 def test_config_only_is_rejected_before_initial_image(tmp_path: Path) -> None:
-    root = isolated_root(tmp_path)
+    root = stable_inference_root(tmp_path)
     # The repository's production manifest changes after the first image
     # release. Reconstruct the pre-release state so this test remains valid
     # both before and after that lifecycle transition.
@@ -171,7 +244,7 @@ def test_config_only_is_rejected_before_initial_image(tmp_path: Path) -> None:
 
 
 def test_secret_reference_creates_external_secret_without_secret_value(tmp_path: Path) -> None:
-    root = isolated_root(tmp_path)
+    root = stable_inference_root(tmp_path)
     payload = inference_contract(root)
     payload["secret_refs"] = {
         "UPSTREAM_API_TOKEN": {"key": "iris/inference/upstream", "property": "token"}
@@ -185,7 +258,7 @@ def test_secret_reference_creates_external_secret_without_secret_value(tmp_path:
 
 
 def test_rejects_repository_outside_platform_allow_list(tmp_path: Path) -> None:
-    root = isolated_root(tmp_path)
+    root = stable_inference_root(tmp_path)
     payload = inference_contract(root)
     payload["image"]["repository"] = f"{ECR_ROOT}/another-image"
     with pytest.raises(ValueError, match="Terraform-approved"):
@@ -193,7 +266,7 @@ def test_rejects_repository_outside_platform_allow_list(tmp_path: Path) -> None:
 
 
 def test_rejects_unapproved_schema_digest(tmp_path: Path) -> None:
-    root = isolated_root(tmp_path)
+    root = stable_inference_root(tmp_path)
     payload = inference_contract(root)
     payload["config_schema_digest"] = "sha256:" + "0" * 64
     with pytest.raises(ValueError, match="GitOps-approved schema"):
@@ -201,7 +274,7 @@ def test_rejects_unapproved_schema_digest(tmp_path: Path) -> None:
 
 
 def test_accepts_a_separately_approved_v2_schema(tmp_path: Path) -> None:
-    root = isolated_root(tmp_path)
+    root = stable_inference_root(tmp_path)
     v1 = root / "contracts/workload-config/inference-v1.schema.json"
     v2 = root / "contracts/workload-config/inference-v2.schema.json"
     v2.write_bytes(v1.read_bytes())
@@ -222,7 +295,7 @@ def test_accepts_a_separately_approved_v2_schema(tmp_path: Path) -> None:
 
 
 def test_rejects_plain_secret_like_config(tmp_path: Path) -> None:
-    root = isolated_root(tmp_path)
+    root = stable_inference_root(tmp_path)
     payload = inference_contract(root)
     payload["runtime_config"]["API_TOKEN"] = "do-not-commit"
     with pytest.raises(ValueError, match="Secret-like"):

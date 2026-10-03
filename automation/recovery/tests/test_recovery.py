@@ -9,7 +9,10 @@ from automation.model_release.renderer import render_model_release
 from automation.recovery.check_pr import check
 from automation.recovery.renderer import INFERENCE, LOCK, git, prepare, render
 from automation.workload_release.renderer import render_workload_release
-from automation.workload_release.tests.test_renderer import inference_contract, isolated_root
+from automation.workload_release.tests.test_renderer import (
+    inference_contract,
+    stable_inference_root,
+)
 
 
 def commit(root: Path, message: str) -> str:
@@ -38,7 +41,7 @@ def set_model(root: Path, version: str, *, canary: bool = False) -> None:
 
 @pytest.fixture
 def history(tmp_path):
-    root = isolated_root(tmp_path)
+    root = stable_inference_root(tmp_path)
     git(root, "init", "-b", "main")
     git(root, "config", "user.name", "Recovery Tests")
     git(root, "config", "user.email", "tests@example.invalid")
