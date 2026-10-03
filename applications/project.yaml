@@ -15,6 +15,7 @@ spec:
     - https://prometheus-community.github.io/helm-charts
     - https://aws.github.io/eks-charts
     - https://kubernetes-sigs.github.io/external-dns/
+    - https://charts.jetstack.io
     - ghcr.io/kserve/charts
   destinations:
     - namespace: "*"

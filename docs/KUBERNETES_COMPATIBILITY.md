@@ -2,11 +2,15 @@
 
 Reviewed 2026-09-29. The infrastructure initial-install profile selects EKS `1.34`.
 GitOps CI uses kubectl `v1.34.0` and kubeconform schemas `1.34.0`. KServe is still
-`v0.19.0`; Knative Serving/Kourier are still `knative-v1.20.0`.
+`v0.19.0`; Knative Serving/Kourier are still `knative-v1.20.0`; cert-manager is
+pinned to `v1.21.2` and owns its CRDs through the Helm release.
 
 KServe's versioned [0.19 compatibility matrix](https://kserve.github.io/website/docs/0.19/admin-guide/serverless)
 includes Kubernetes 1.34 with Knative 1.20. The rollout observer's existing kubectl 1.33
 client is within Kubernetes' [one-minor skew policy](https://kubernetes.io/releases/version-skew-policy/#kubectl).
+cert-manager 1.21 supports Kubernetes 1.33 through 1.36, covering both the live 1.33 cluster
+and the reviewed 1.34 profile. KServe requires cert-manager to issue its admission-webhook
+certificate; the cert-manager Application must therefore become Healthy before KServe resources.
 The regression test ties the CI schema/client and observer skew to this profile. Review the
 observer image's availability as part of deployment preflight, not just its version number.
 

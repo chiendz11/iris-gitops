@@ -15,6 +15,13 @@ metadata:
 apiVersion: v1
 kind: Namespace
 metadata:
+  name: cert-manager
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+---
+apiVersion: v1
+kind: Namespace
+metadata:
   name: external-dns
   annotations:
     argocd.argoproj.io/sync-options: Prune=false
