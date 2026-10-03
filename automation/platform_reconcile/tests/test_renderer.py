@@ -128,15 +128,29 @@ def test_renders_platform_fields_and_stable_image_allow_list(tmp_path: Path) -> 
 
 def test_platform_reconcile_accepts_an_existing_workload_release(tmp_path: Path) -> None:
     root = isolated_root(tmp_path)
-    registry = root / "environments/production/model-registry/kustomization.yaml"
-    released = registry.read_text().replace(
-        "newName: REPLACE_ECR_MLFLOW_REPOSITORY",
-        f"newName: {ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/iris-mlops-prod/mlflow",
-    ).replace(
-        "newTag: REPLACE_IMAGE_TAG",
-        f"digest: sha256:{'b' * 64}",
+    # Build the lifecycle state exercised by this test explicitly instead of
+    # inheriting whichever workload releases happen to be on GitOps main.
+    # Here model-registry is released while inference is still bootstrapping.
+    inference = root / "environments/production/inference-service/inferenceservice.yaml"
+    inference_manifest = yaml.safe_load(inference.read_text())
+    inference_manifest["spec"]["predictor"]["containers"][0]["image"] = (
+        "REPLACE_ECR_INFERENCE_IMAGE"
     )
-    registry.write_text(released)
+    inference.write_text(yaml.safe_dump(inference_manifest, sort_keys=False))
+
+    registry = root / "environments/production/model-registry/kustomization.yaml"
+    registry_manifest = yaml.safe_load(registry.read_text())
+    registry_manifest["images"] = [
+        {
+            "name": "iris-mlflow",
+            "newName": (
+                f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com/"
+                "iris-mlops-prod/mlflow"
+            ),
+            "digest": f"sha256:{'b' * 64}",
+        }
+    ]
+    registry.write_text(yaml.safe_dump(registry_manifest, sort_keys=False))
 
     render_platform_contract(root, contract())
 

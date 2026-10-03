@@ -154,6 +154,16 @@ def test_rejects_required_config_that_disagrees_with_approved_schema(
 
 def test_config_only_is_rejected_before_initial_image(tmp_path: Path) -> None:
     root = isolated_root(tmp_path)
+    # The repository's production manifest changes after the first image
+    # release. Reconstruct the pre-release state so this test remains valid
+    # both before and after that lifecycle transition.
+    manifest_path = root / "environments/production/inference-service/inferenceservice.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text())
+    manifest["spec"]["predictor"]["containers"][0]["image"] = (
+        "REPLACE_ECR_INFERENCE_IMAGE"
+    )
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False))
+
     payload = inference_contract(root)
     del payload["image"]
     with pytest.raises(ValueError, match="first inference release"):
