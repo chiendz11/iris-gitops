@@ -3,6 +3,8 @@ kind: InferenceService
 metadata:
   name: iris-classifier
   namespace: mlops
+  annotations:
+    mlops.iris/stable-model-version: '2'
 spec:
   predictor:
     minReplicas: 1
@@ -21,9 +23,9 @@ spec:
       - name: MLFLOW_TRACKING_URI
         value: http://mlflow.mlops.svc.cluster.local:5000
       - name: MODEL_URI
-        value: models:/iris-classifier@champion
+        value: models:/iris-classifier/2
       - name: MODEL_VERSION
-        value: champion
+        value: '2'
       - name: SERVICE_NAME
         value: iris-classifier
       - name: DRIFT_WINDOW_SIZE
