@@ -1,24 +1,25 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
-  - service-account.yaml
-  - external-secret.yaml
-  - deployment.yaml
-  - service.yaml
-  - pdb.yaml
-  - network-policy.yaml
+- service-account.yaml
+- external-secret.yaml
+- deployment.yaml
+- service.yaml
+- pdb.yaml
+- network-policy.yaml
 configMapGenerator:
-  - name: mlflow-config
-    namespace: mlops
-    literals:
-      - POSTGRES_HOST=iris-mlops-prod-mlflow.c5yqgcw0kopi.ap-southeast-1.rds.amazonaws.com
-      - POSTGRES_DB=mlflow
-      - MLFLOW_ARTIFACT_BUCKET=iris-mlops-prod-mlflow-794f8f04
-      - MLFLOW_ALLOWED_HOSTS=mlflow,mlflow.mlops.svc,mlflow.mlops.svc.cluster.local
-      - MLFLOW_CORS_ALLOWED_ORIGINS=http://mlflow.mlops.svc.cluster.local:5000
-# A config-only release/recovery must change the Deployment's ConfigMap reference.
-generatorOptions: {disableNameSuffixHash: false}
+- name: mlflow-config
+  namespace: mlops
+  literals:
+  - POSTGRES_HOST=iris-mlops-prod-mlflow.c5yqgcw0kopi.ap-southeast-1.rds.amazonaws.com
+  - POSTGRES_DB=mlflow
+  - MLFLOW_ARTIFACT_BUCKET=iris-mlops-prod-mlflow-794f8f04
+  - MLFLOW_ALLOWED_HOSTS=mlflow,mlflow.mlops.svc,mlflow.mlops.svc.cluster.local
+  - MLFLOW_CORS_ALLOWED_ORIGINS=http://mlflow.mlops.svc.cluster.local:5000
+  - MLFLOW_WORKERS=2
+generatorOptions:
+  disableNameSuffixHash: false
 images:
-  - name: iris-mlflow
-    newName: REPLACE_ECR_MLFLOW_REPOSITORY
-    newTag: REPLACE_IMAGE_TAG
+- name: iris-mlflow
+  newName: 980794397912.dkr.ecr.ap-southeast-1.amazonaws.com/iris-mlops-prod/mlflow
+  digest: sha256:7c99b37b4551d914942b82609931343811b20d52f1b9ad3ee501157715a9d738
