@@ -16,7 +16,7 @@ configMapGenerator:
   - MLFLOW_ARTIFACT_BUCKET=iris-mlops-prod-mlflow-794f8f04
   - MLFLOW_ALLOWED_HOSTS=mlflow,mlflow.mlops.svc,mlflow.mlops.svc.cluster.local
   - MLFLOW_CORS_ALLOWED_ORIGINS=http://mlflow.mlops.svc.cluster.local:5000
-  - MLFLOW_WORKERS=2
+  - MLFLOW_WORKERS=1
 generatorOptions:
   disableNameSuffixHash: false
 images:
