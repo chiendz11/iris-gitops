@@ -5,6 +5,7 @@ metadata:
   namespace: mlops
   annotations:
     mlops.iris/stable-model-version: '2'
+    mlops.iris/candidate-model-version: '3'
 spec:
   predictor:
     minReplicas: 1
@@ -23,9 +24,9 @@ spec:
       - name: MLFLOW_TRACKING_URI
         value: http://mlflow.mlops.svc.cluster.local:5000
       - name: MODEL_URI
-        value: models:/iris-classifier/2
+        value: models:/iris-classifier/3
       - name: MODEL_VERSION
-        value: '2'
+        value: '3'
       - name: SERVICE_NAME
         value: iris-classifier
       - name: DRIFT_WINDOW_SIZE
@@ -53,3 +54,4 @@ spec:
           port: 8080
         initialDelaySeconds: 10
         periodSeconds: 10
+    canaryTrafficPercent: 10
