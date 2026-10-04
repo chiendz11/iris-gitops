@@ -4,8 +4,7 @@ metadata:
   name: iris-classifier
   namespace: mlops
   annotations:
-    mlops.iris/stable-model-version: '2'
-    mlops.iris/candidate-model-version: '3'
+    mlops.iris/stable-model-version: '3'
 spec:
   predictor:
     minReplicas: 1
@@ -54,4 +53,3 @@ spec:
           port: 8080
         initialDelaySeconds: 10
         periodSeconds: 10
-    canaryTrafficPercent: 10
