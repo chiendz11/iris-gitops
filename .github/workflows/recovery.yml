@@ -68,12 +68,12 @@ jobs:
           test "${TRIGGERING_ACTOR}" = "${OWNER}"
           test "${PREFLIGHT}" = true
 
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - run: pip install jsonschema==4.25.1 PyYAML==6.0.3
@@ -108,7 +108,7 @@ jobs:
             --jq '[.[] | select((.headRefName | startswith("release/")) or (.headRefName | startswith("recovery/")))] | length')"
           test "${count}" = 0 || { echo "Resolve open release/recovery PRs first." >&2; exit 1; }
 
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
         if: inputs.component != 'model'
       - name: Verify target image exists and retains the approved producer signature
         if: inputs.component != 'model'
